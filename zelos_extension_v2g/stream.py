@@ -110,10 +110,4 @@ class V2gStreamDecoder:
 
     def _direction(self, key: tuple) -> str:
         src_ip, sport, dst_ip, dport = key
-        secc = (self.secc_ip, self.secc_port)
-        if secc != (None, None):
-            if (dst_ip, dport) == secc:
-                return "EVCC->SECC"
-            if (src_ip, sport) == secc:
-                return "SECC->EVCC"
-        return f"{sport}->{dport}"
+        return p.v2g_direction(src_ip, sport, dst_ip, dport, self.secc_ip, self.secc_port)

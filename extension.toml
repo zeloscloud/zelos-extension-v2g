@@ -2,7 +2,7 @@ name = "V2G"
 version = "0.1.0"
 description = "ISO 15118 / DIN 70121 V2G (EV-charger) communication decode and pcap-to-trace conversion"
 author = "Zelos"
-repository = "https://github.com/zeloscloud/v2g"
+repository = "https://github.com/zeloscloud/zelos-extension-v2g"
 icon = "assets/icon.svg"
 readme = "README.md"
 

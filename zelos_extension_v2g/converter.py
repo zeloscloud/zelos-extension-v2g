@@ -20,9 +20,10 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_FORMATS = {".pcap", ".pcapng"}
 
-# The async TraceWriter batches in a background thread; give it a moment to
-# flush before the writer context closes. (Same workaround the CAN converter uses
-# until the SDK exposes an explicit flush/backpressure handle.)
+# The TraceSource → TraceWriter pipeline drains on a background thread; the writer's
+# close() does not block for it, and the SDK exposes no explicit flush. Without a short
+# settle, a fast conversion can close the file before the events are written (the rows
+# are silently lost). Same workaround the CAN converter uses.
 _FLUSH_SECONDS = 2.0
 
 
@@ -72,7 +73,7 @@ def convert_v2g_pcap(input_file: Path, output_file: Path) -> ConversionStats:
     with zelos_sdk.TraceWriter(str(output_file), namespace=converter_namespace):
         codec = V2gCodec(namespace=converter_namespace)
         stats = codec.process(session)
-        time.sleep(_FLUSH_SECONDS)
+        time.sleep(_FLUSH_SECONDS)  # let the writer drain before close() (see above)
 
     logger.info("Conversion complete: %s", stats.to_dict())
     return stats

@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import ctypes
 import json
+import logging
 import platform
 from functools import lru_cache
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 _LIB_DIR = Path(__file__).parent / "_lib"
-_OUT_CAP = 2048
+# Capacity of the JSON buffer the shim decodes one message into. Decoded telemetry
+# objects are small (a handful of numeric/short-string fields, typically <500 B); this
+# is generous headroom. If a message's JSON ever exceeds it the shim truncates, which
+# we detect (see _decode) rather than emit malformed JSON.
+_OUT_CAP = 16384
 
 
 def _artifact_name() -> str:
@@ -55,8 +62,13 @@ def _decode(fn_name: str, exi: bytes) -> dict | None:
     # buffer, and the C side reads exactly `len(exi)` bytes (not strlen), so NULs
     # are safe here.
     out = ctypes.create_string_buffer(_OUT_CAP)
+    # The shim returns bytes written, or the would-be length if it overran `cap`
+    # (vsnprintf semantics); n >= cap therefore means the JSON was truncated.
     n = getattr(lib, fn_name)(exi, len(exi), out, _OUT_CAP)
     if n <= 0:
+        return None
+    if n >= _OUT_CAP:
+        logger.warning("%s output truncated at %d bytes; field decode dropped", fn_name, _OUT_CAP)
         return None
     try:
         return json.loads(out.raw[:n])

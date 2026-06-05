@@ -10,7 +10,6 @@ a pcap or live off the wire. Converter-first; live capture shares the same codec
 | `zelos_extension_v2g/protocol.py` | Wire constants + SLAC MMTYPE table (no logic). |
 | `zelos_extension_v2g/pcap.py` | scapy-based offline reader → SLAC/SDP/V2GTP records (`decode_session`). |
 | `zelos_extension_v2g/stream.py` | Incremental V2GTP framer for the live path (`V2gStreamDecoder`). |
-| `zelos_extension_v2g/slac.py` | Pure-Python SLAC body decode + init health summary. |
 | `zelos_extension_v2g/exi/libv2g.py` | ctypes binding to the bundled libcbv2g shim. |
 | `zelos_extension_v2g/exi/_lib/` | Prebuilt, committed shim libraries (one per platform). |
 | `zelos_extension_v2g/codec.py` | Records → Zelos trace events (the shared schema). |
@@ -21,10 +20,22 @@ a pcap or live off the wire. Converter-first; live capture shares the same codec
 
 ## Decode is layered
 
-- **Layer 1** (pure-Python, always works): SLAC handshake + init summary, SDP discovery,
-  V2GTP message timeline with raw EXI retained per row.
+- **Layer 1** (pure-Python, always works): every SLAC frame (typed by MMTYPE name, raw
+  bytes retained; `CM_ATTEN_CHAR.IND` and `CM_SLAC_MATCH.CNF` also decoded per-frame via
+  `slac.py` into `v2g/slac_attenuation` / `v2g/slac_match`), SDP discovery, and the V2GTP
+  message timeline with raw EXI per row.
 - **Layer 2** (needs the bundled shim): per-message EXI field decode. If no shim is
   bundled for the platform, `libv2g.available()` is False and Layer 1 stands alone.
+
+This extension is deliberately **packet-in / row-out, like the CAN extension**: every event
+maps to a frame on the wire and its decoded fields. Decode encoded bytes into human-readable
+fields wherever possible, but synthesize nothing across frames — no session-level summaries,
+health roll-ups, or inferred/defaulted values.
+
+The converter `time.sleep(_FLUSH_SECONDS)` after `process()` is **load-bearing**: the
+TraceSource→TraceWriter pipeline drains on a background thread and `close()` does not block
+for it (no explicit flush API). Without the settle, a fast conversion closes the file before
+rows are written and they're silently lost. Do not remove it.
 
 `codec.emit_message` dispatches per dialect: `decode_din(exi) or decode_iso2(exi) or
 decode_sap(exi)`. The dialects are mutually exclusive — a message of one dialect returns
