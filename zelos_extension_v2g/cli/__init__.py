@@ -2,6 +2,7 @@
 
 from .app import run_app_mode
 from .convert import convert
+from .decode import decode
 from .live import live
 
-__all__ = ["convert", "live", "run_app_mode"]
+__all__ = ["convert", "decode", "live", "run_app_mode"]

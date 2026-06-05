@@ -117,6 +117,29 @@ def sniff_into(
         logger.exception("V2G live capture stopped on error")
 
 
+def decode_stream_into(codec: V2gCodec, source=None) -> None:
+    """Decode a pcap byte stream (default ``sys.stdin.buffer``) into ``codec``'s live
+    source. Each frame is stamped at arrival, so a capture piped from a remote
+    ``tcpdump -w -`` appears live in the agent — the network analog of
+    ``candump | cantools decode``. Assumes the SDK is already initialized.
+    """
+    import sys
+
+    from scapy.utils import PcapReader
+
+    stream = source if source is not None else sys.stdin.buffer
+    decoder = _build_decoder(codec, retime=lambda ts: time.time())
+    try:
+        with PcapReader(stream) as reader:
+            for pkt in reader:
+                decoder.feed_packet(pkt)
+    except (BrokenPipeError, EOFError):
+        pass  # producer closed the pipe — normal end of stream
+    except Exception:
+        logger.exception("V2G stdin decode stopped on error")
+    logger.info("Stream ended: %d V2G messages decoded", decoder.message_count)
+
+
 def run_live(
     iface: str | None = None,
     replay: str | Path | None = None,
@@ -126,3 +149,10 @@ def run_live(
     zelos_sdk.init(name="v2g")
     logging.getLogger().addHandler(TraceLoggingHandler("v2g_logger"))
     sniff_into(V2gCodec(source_name=source_name), iface=iface, replay=replay)
+
+
+def run_decode(source_name: str = "v2g") -> None:
+    """Standalone (CLI) stdin decoder: initialize the SDK, then decode a piped pcap."""
+    zelos_sdk.init(name="v2g")
+    logging.getLogger().addHandler(TraceLoggingHandler("v2g_logger"))
+    decode_stream_into(V2gCodec(source_name=source_name))

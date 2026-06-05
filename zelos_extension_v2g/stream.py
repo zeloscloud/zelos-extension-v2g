@@ -14,10 +14,9 @@ from collections.abc import Callable
 
 from scapy.layers.inet import TCP, UDP
 from scapy.layers.inet6 import IPv6
-from scapy.layers.l2 import Ether
 
 from . import protocol as p
-from .pcap import SdpFrame, SlacFrame, V2gMessage, _parse_sdp, _parse_slac
+from .pcap import SdpFrame, SlacFrame, V2gMessage, _parse_sdp, _parse_slac, link_frame
 
 
 class _Framer:
@@ -66,13 +65,12 @@ class V2gStreamDecoder:
         return self._index
 
     def feed_packet(self, pkt) -> None:
-        if Ether not in pkt:
-            return
         ts = float(pkt.time)
-        eth = pkt[Ether]
+        ll = link_frame(pkt)
 
-        if eth.type == p.ETHERTYPE_HOMEPLUG_AV:
-            frame = _parse_slac(ts, bytes(eth.payload), eth.src, eth.dst)
+        if ll is not None and ll[0] == p.ETHERTYPE_HOMEPLUG_AV:
+            _, payload, src, dst = ll
+            frame = _parse_slac(ts, payload, src, dst)
             if frame is not None and self.on_slac:
                 self.on_slac(frame)
             return
