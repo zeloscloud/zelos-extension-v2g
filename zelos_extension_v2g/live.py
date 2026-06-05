@@ -53,6 +53,36 @@ def _build_decoder(codec: V2gCodec, retime=lambda ts: ts) -> V2gStreamDecoder:
     return V2gStreamDecoder(on_slac=on_slac, on_sdp=on_sdp, on_message=on_message)
 
 
+def _replay_into(codec: V2gCodec, path: str, realtime: bool) -> None:
+    """Replay a capture into ``codec``'s live source.
+
+    ``realtime`` (default): release each frame at its real offset from the first —
+    i.e. honor the capture's inter-frame deltas — and stamp it at arrival, so the
+    session plays out in the live view over its true duration (like ``tcpreplay``).
+    Otherwise feed as fast as possible, preserving the original capture timestamps
+    (used by tests and quick offline import).
+    """
+    from scapy.utils import PcapReader
+
+    decoder = _build_decoder(
+        codec, retime=(lambda ts: time.time()) if realtime else (lambda ts: ts)
+    )
+    with PcapReader(path) as reader:
+        wall_start = time.time()
+        first_ts: float | None = None
+        for pkt in reader:
+            if realtime:
+                ts = float(pkt.time)
+                if first_ts is None:
+                    first_ts = ts
+                # Sleep until this frame's real offset from the first one has elapsed.
+                delay = (wall_start + (ts - first_ts)) - time.time()
+                if delay > 0:
+                    time.sleep(delay)
+            decoder.feed_packet(pkt)
+    logger.info("Replay complete: %d V2G messages streamed", decoder.message_count)
+
+
 def sniff_into(
     codec: V2gCodec,
     iface: str | None = None,
@@ -63,19 +93,21 @@ def sniff_into(
 
     ``iface`` may be a single name or a comma-separated list. ``replay`` reads a
     pcap/pcapng through the identical callback path (no interface/root needed); with
-    ``realtime`` it is stamped at arrival so the replay appears live (mirroring a
-    ``tcpreplay`` onto an interface, where frames are timestamped on the wire).
+    ``realtime`` the replay is paced by the capture's inter-frame deltas and stamped at
+    arrival, so it appears live exactly as it happened on the wire.
     """
-    from scapy.sendrecv import sniff
-
-    retime = (lambda ts: time.time()) if (replay and realtime) else (lambda ts: ts)
-    decoder = _build_decoder(codec, retime)
     try:
         if replay:
-            logger.info("Replaying %s as a live V2G stream", replay)
-            sniff(offline=str(replay), prn=decoder.feed_packet, store=False)
-            logger.info("Replay complete: %d V2G messages streamed", decoder.message_count)
+            logger.info(
+                "Replaying %s as a live V2G stream%s",
+                replay,
+                " (real-time)" if realtime else " (fast)",
+            )
+            _replay_into(codec, str(replay), realtime)
         else:
+            from scapy.sendrecv import sniff
+
+            decoder = _build_decoder(codec)  # live socket already stamps real arrival time
             ifaces: str | list[str] | None = iface
             if iface and "," in iface:
                 ifaces = [s.strip() for s in iface.split(",")]
