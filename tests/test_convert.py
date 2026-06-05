@@ -307,3 +307,26 @@ def test_live_emits_same_records_as_batch() -> None:
     assert codec.slac == len(batch.slac)
     assert codec.sdp == len(batch.sdp)
     assert codec.messages == len(batch.messages)
+
+
+def test_replay_paces_by_capture_deltas(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real-time replay releases frames spaced by the capture's actual inter-frame
+    deltas (not a fast burst). The scheduled sleeps are captured without real waiting."""
+    import time as _time
+
+    from scapy.utils import PcapReader
+
+    from zelos_extension_v2g.live import sniff_into
+
+    with PcapReader(str(SLAC_FAIL)) as reader:
+        times = [float(p.time) for p in reader]
+    span = times[-1] - times[0]
+    assert span > 1.0  # the SLAC retries play out over seconds — a real schedule, not 0
+
+    delays: list[float] = []
+    monkeypatch.setattr(_time, "sleep", lambda d: delays.append(d))
+    sniff_into(_CountingCodec(), replay=str(SLAC_FAIL), realtime=True)
+
+    # Frames were paced out to ~the capture span (a fast burst would schedule ~nothing).
+    assert delays, "expected real-time pacing to schedule sleeps"
+    assert max(delays) == pytest.approx(span, abs=2.0)
