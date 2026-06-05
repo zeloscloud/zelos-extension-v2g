@@ -1,0 +1,20 @@
+name = "V2G"
+version = "0.1.0"
+description = "ISO 15118 / DIN 70121 V2G (EV-charger) communication decode and pcap-to-trace conversion"
+author = "Zelos"
+repository = "https://github.com/zeloscloud/v2g"
+icon = "assets/icon.svg"
+readme = "README.md"
+
+[config]
+schema = "config.schema.json"
+
+[host]
+type = "agent"
+
+[host.agent]
+entry = "main.py"
+python_version = "3.11"
+
+[package]
+paths = ["main.py", "zelos_extension_v2g"]
