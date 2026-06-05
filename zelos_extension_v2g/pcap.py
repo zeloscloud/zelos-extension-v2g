@@ -34,12 +34,11 @@ from . import protocol as p
 @dataclass(slots=True)
 class SlacFrame:
     ts: float
-    mmv: int
     mmtype: int
     name: str
     src_mac: str
     dst_mac: str
-    payload: bytes = b""  # full MME (header + body), for SLAC body decode
+    payload: bytes = b""  # full MME (header + body), retained raw on the wire
 
 
 @dataclass(slots=True)
@@ -83,7 +82,6 @@ def _parse_slac(ts: float, payload: bytes, src_mac: str, dst_mac: str) -> SlacFr
     mmtype = struct.unpack("<H", payload[1:3])[0]
     return SlacFrame(
         ts=ts,
-        mmv=payload[0],
         mmtype=mmtype,
         name=p.slac_mmtype_name(mmtype),
         src_mac=src_mac,
@@ -137,15 +135,17 @@ def _parse_sdp(ts: float, body: bytes, ptype: int) -> SdpFrame:
             security=p.SDP_SECURITY.get(body[18], f"{body[18]:#04x}"),
             transport=p.SDP_TRANSPORT.get(body[19], f"{body[19]:#04x}"),
         )
-    sec = body[0] if len(body) >= 1 else 0x10
-    trn = body[1] if len(body) >= 2 else 0x00
+    # Report exactly what the request carried; mark "unknown" if a byte is absent
+    # (truncated frame) rather than inventing a default that wasn't on the wire.
+    security = p.SDP_SECURITY.get(body[0], f"{body[0]:#04x}") if len(body) >= 1 else "unknown"
+    transport = p.SDP_TRANSPORT.get(body[1], f"{body[1]:#04x}") if len(body) >= 2 else "unknown"
     return SdpFrame(
         ts=ts,
         kind="request",
         secc_ip=None,
         secc_port=None,
-        security=p.SDP_SECURITY.get(sec, f"{sec:#04x}"),
-        transport=p.SDP_TRANSPORT.get(trn, f"{trn:#04x}"),
+        security=security,
+        transport=transport,
     )
 
 
@@ -188,15 +188,6 @@ def decode_session(path: str | Path) -> DecodedSession:
                 if data:
                     tcp_streams[(ip.src, pkt[TCP].sport, ip.dst, pkt[TCP].dport)].append((ts, data))
 
-    def direction(src_ip: str, sport: int, dst_ip: str, dport: int) -> str:
-        secc = (session.secc_ip, session.secc_port)
-        if secc != (None, None):
-            if (dst_ip, dport) == secc:
-                return "EVCC->SECC"
-            if (src_ip, sport) == secc:
-                return "SECC->EVCC"
-        return f"{sport}->{dport}"
-
     # TCP reassembly is capture-order concatenation per 4-tuple: it assumes an
     # in-order, loss-free capture (true for a bridged V2G session) and does not
     # reorder by sequence number or drop retransmits.
@@ -207,7 +198,9 @@ def decode_session(path: str | Path) -> DecodedSession:
                 V2gMessage(
                     ts=fts,
                     index=0,
-                    direction=direction(src_ip, sport, dst_ip, dport),
+                    direction=p.v2g_direction(
+                        src_ip, sport, dst_ip, dport, session.secc_ip, session.secc_port
+                    ),
                     payload_type=ptype,
                     length=len(body),
                     exi=body,

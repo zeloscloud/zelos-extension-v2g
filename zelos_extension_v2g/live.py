@@ -25,30 +25,22 @@ from .stream import V2gStreamDecoder
 
 logger = logging.getLogger(__name__)
 
-# SLAC pairing completes at the MATCH confirmation -> emit a one-shot init summary.
-# (CM_SET_KEY is local modem key-setup and can appear before SLAC even starts, so it
-# is not a reliable "done" marker.)
-_SLAC_DONE = {"CM_SLAC_MATCH.CNF"}
 # Capture filter: IPv6 (SDP/V2GTP) + HomePlug AV (SLAC).
 _BPF = "ip6 or ether proto 0x88e1"
 
 
 def _build_decoder(codec: V2gCodec, retime=lambda ts: ts) -> V2gStreamDecoder:
-    """Wire a stream decoder to a codec, emitting a one-shot SLAC summary on match.
+    """Wire a stream decoder to a codec: each frame is decoded and emitted as it
+    arrives — the same per-record path the offline converter uses, so live and trace
+    modes produce identical rows.
 
     ``retime`` maps each record's timestamp before emit (identity for live capture;
     arrival-time for replay, so a replayed pcap appears in the live view).
     """
-    slac_frames: list[SlacFrame] = []
-    state = {"summarized": False}
 
     def on_slac(f: SlacFrame) -> None:
         f.ts = retime(f.ts)
         codec.emit_slac(f)
-        slac_frames.append(f)
-        if f.name in _SLAC_DONE and not state["summarized"]:
-            codec.emit_slac_summary(slac_frames, ts=f.ts)
-            state["summarized"] = True
 
     def on_sdp(f) -> None:
         f.ts = retime(f.ts)

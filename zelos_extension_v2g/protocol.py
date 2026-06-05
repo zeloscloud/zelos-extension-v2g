@@ -70,3 +70,26 @@ SLAC_MMTYPES = {
 def slac_mmtype_name(mmtype: int) -> str:
     """Human-readable SLAC message name, or a hex fallback."""
     return SLAC_MMTYPES.get(mmtype, f"MMTYPE_{mmtype:#06x}")
+
+
+def v2g_direction(
+    src_ip: str,
+    sport: int,
+    dst_ip: str,
+    dport: int,
+    secc_ip: str | None,
+    secc_port: int | None,
+) -> str:
+    """Label a TCP flow by V2G role using the SDP-discovered SECC endpoint.
+
+    Shared by the batch (pcap) and incremental (stream) decoders so both tag
+    direction identically. Falls back to ``"{sport}->{dport}"`` until the SECC
+    endpoint is known.
+    """
+    secc = (secc_ip, secc_port)
+    if secc != (None, None):
+        if (dst_ip, dport) == secc:
+            return "EVCC->SECC"
+        if (src_ip, sport) == secc:
+            return "SECC->EVCC"
+    return f"{sport}->{dport}"

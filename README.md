@@ -15,13 +15,18 @@ Decode is layered, so you get useful output even on captures the EXI codec can't
 parse:
 
 **Layer 1 — transport & pairing (always on, pure-Python):**
-- **SLAC** HomePlug AV pairing handshake (ISO 15118-3) — every MME, plus a one-row
-  **init health summary** (matched?, duration, MNBC sound count, attenuation profile in
-  dB, NID/NMK) and the 58-group attenuation profile. SLAC bring-up is the most common
-  field failure, so this stands on its own.
+- **SLAC** HomePlug AV pairing handshake (ISO 15118-3) — every MME, in order, typed by
+  its MMTYPE name (e.g. `CM_SLAC_PARM.REQ`, `CM_ATTEN_CHAR.IND`, `CM_SLAC_MATCH.CNF`)
+  with source/destination MAC and the raw frame bytes retained per row. Frames that
+  carry decodable fields are decoded per-frame: `CM_ATTEN_CHAR.IND` → the link
+  attenuation profile (per-group dB), `CM_SLAC_MATCH.CNF` → the matched NID/NMK. SLAC
+  bring-up is the most common field failure, so the full handshake is on the timeline.
 - **SDP** SECC discovery — the resolved charger IP/port, security, and transport.
 - **V2GTP** message timeline — every application message with direction, length, and
   raw EXI retained per row.
+
+Every event corresponds to a frame on the wire and its decoded fields — the extension
+does not synthesize cross-frame "session health" summaries or roll-ups.
 
 **Layer 2 — application message field decode (via bundled libcbv2g):**
 - **DIN 70121** and **ISO 15118-2** DC/AC sessions: each message type becomes its own
@@ -113,8 +118,8 @@ compiler, and `git`). See [`native/README.md`](native/README.md).
 
 ## Links
 
-- [Repository](https://github.com/zeloscloud/v2g)
-- [Issues](https://github.com/zeloscloud/v2g/issues)
+- [Repository](https://github.com/zeloscloud/zelos-extension-v2g)
+- [Issues](https://github.com/zeloscloud/zelos-extension-v2g/issues)
 - [Zelos Documentation](https://docs.zeloscloud.io)
 - [SDK Guide](https://docs.zeloscloud.io/sdk)
 

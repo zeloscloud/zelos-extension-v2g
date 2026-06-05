@@ -187,6 +187,7 @@ class V2gCodec:
                 F("name", DT.String),
                 F("src_mac", DT.String),
                 F("dst_mac", DT.String),
+                F("data", DT.Binary),  # raw MME bytes, as seen on the wire
             ],
         )
         self.sdp_event = self.source.add_event(
@@ -210,9 +211,9 @@ class V2gCodec:
                 F("exi", DT.Binary),
             ],
         )
-        # SLAC attenuation profile (per CM_ATTEN_CHAR.IND) — link signal quality.
+        # Decoded fields carried by individual SLAC frames (strictly per-frame).
         self.slac_attenuation_event = self.source.add_event(
-            "slac_attenuation",
+            "slac_attenuation",  # one row per CM_ATTEN_CHAR.IND
             [
                 F("run_id", DT.String),
                 F("num_sounds", DT.UInt8),
@@ -222,21 +223,12 @@ class V2gCodec:
                 F("atten_mean", DT.Float32, "dB"),
             ],
         )
-        # One-row SLAC-init health summary for the session.
-        self.slac_summary_event = self.source.add_event(
-            "slac_summary",
+        self.slac_match_event = self.source.add_event(
+            "slac_match",  # one row per CM_SLAC_MATCH.CNF
             [
-                F("matched", DT.Boolean),
-                F("duration_ms", DT.Float32, "ms"),
-                F("mnbc_sounds", DT.UInt8),
-                F("start_atten_inds", DT.UInt8),
-                F("parm_reqs", DT.UInt8),
-                F("set_key", DT.Boolean),
                 F("run_id", DT.String),
                 F("nid", DT.String),
-                F("atten_min", DT.UInt8, "dB"),
-                F("atten_max", DT.UInt8, "dB"),
-                F("atten_mean", DT.Float32, "dB"),
+                F("nmk", DT.String),
             ],
         )
 
@@ -281,8 +273,14 @@ class V2gCodec:
 
     def emit_slac(self, f: SlacFrame) -> None:
         self.slac_event.log_at(
-            _ts_ns(f.ts), mmtype=f.mmtype, name=f.name, src_mac=f.src_mac, dst_mac=f.dst_mac
+            _ts_ns(f.ts),
+            mmtype=f.mmtype,
+            name=f.name,
+            src_mac=f.src_mac,
+            dst_mac=f.dst_mac,
+            data=f.payload,
         )
+        # Decode the fields this specific frame carries (per-frame, no aggregation).
         if f.name == "CM_ATTEN_CHAR.IND":
             a = slac.parse_atten_char_ind(f.payload)
             if a:
@@ -296,25 +294,12 @@ class V2gCodec:
                     atten_max=max(aag),
                     atten_mean=sum(aag) / len(aag),
                 )
-
-    def emit_slac_summary(self, frames: list[SlacFrame], ts: float | None = None) -> None:
-        summary = slac.summarize(frames)
-        if summary is None:
-            return
-        self.slac_summary_event.log_at(
-            _ts_ns(ts if ts is not None else frames[0].ts),
-            matched=summary.matched,
-            duration_ms=summary.duration_ms or 0.0,
-            mnbc_sounds=summary.mnbc_sounds,
-            start_atten_inds=summary.start_atten_inds,
-            parm_reqs=summary.parm_reqs,
-            set_key=summary.set_key,
-            run_id=summary.run_id,
-            nid=summary.nid,
-            atten_min=summary.atten_min or 0,
-            atten_max=summary.atten_max or 0,
-            atten_mean=summary.atten_mean or 0.0,
-        )
+        elif f.name == "CM_SLAC_MATCH.CNF":
+            m = slac.parse_slac_match_cnf(f.payload)
+            if m:
+                self.slac_match_event.log_at(
+                    _ts_ns(f.ts), run_id=m["run_id"], nid=m["nid"], nmk=m["nmk"]
+                )
 
     def emit_sdp(self, f: SdpFrame) -> None:
         self.sdp_event.log_at(
@@ -326,17 +311,23 @@ class V2gCodec:
             transport=f.transport,
         )
 
-    def emit_message(self, m: V2gMessage) -> tuple[dict | None, bool]:
+    def emit_message(self, m: V2gMessage) -> tuple[dict | None, str | None, bool]:
         """Emit the raw message row + (if decodable) its field event.
 
-        Returns (decoded_dict_or_None, emitted_field_event).
+        Returns (decoded_dict_or_None, dialect_or_None, emitted_field_event), where
+        ``dialect`` is the grammar that actually decoded this message (factual, never
+        guessed): the SAP-negotiated protocol, or the DIN/ISO grammar that matched.
         """
         ts_ns = _ts_ns(m.ts)
-        decoded = None
+        decoded: dict | None = None
+        dialect: str | None = None
         if libv2g.available():
-            decoded = (
-                libv2g.decode_din(m.exi) or libv2g.decode_iso2(m.exi) or libv2g.decode_sap(m.exi)
-            )
+            if (d := libv2g.decode_din(m.exi)) is not None:
+                decoded, dialect = d, "DIN 70121"
+            elif (d := libv2g.decode_iso2(m.exi)) is not None:
+                decoded, dialect = d, "ISO 15118-2"
+            elif (d := libv2g.decode_sap(m.exi)) is not None:
+                decoded, dialect = d, _protocol_label(d.get("protocol", ""))
         self.message_event.log_at(
             ts_ns,
             index=m.index,
@@ -347,7 +338,7 @@ class V2gCodec:
             exi=m.exi,
         )
         emitted = bool(decoded and self._emit_decoded(decoded, ts_ns))
-        return decoded, emitted
+        return decoded, dialect, emitted
 
     # ── batch driver ──────────────────────────────────────────────────────
 
@@ -359,8 +350,6 @@ class V2gCodec:
         for f in session.slac:
             self.emit_slac(f)
             stats.slac_frames += 1
-        if session.slac:
-            self.emit_slac_summary(session.slac)
 
         for f in session.sdp:
             self.emit_sdp(f)
@@ -370,13 +359,11 @@ class V2gCodec:
             logger.warning("No libcbv2g shim for this platform; emitting Layer-1 framing only")
         for m in session.messages:
             stats.messages += 1
-            decoded, emitted = self.emit_message(m)
+            _decoded, dialect, emitted = self.emit_message(m)
             if emitted:
                 stats.decoded_messages += 1
-                if decoded.get("protocol"):
-                    stats.protocol = _protocol_label(decoded["protocol"])
-                elif stats.protocol is None:
-                    stats.protocol = "DIN 70121"
+            if dialect and stats.protocol is None:
+                stats.protocol = dialect
 
         logger.info("Emitted V2G trace: %s", stats.to_dict())
         return stats
