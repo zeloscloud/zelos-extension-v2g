@@ -88,6 +88,24 @@ Standalone (no agent): `uv run python main.py live --iface eth0` or `--replay fi
 > Live capture needs raw-socket permission. On a permissioned Linux deploy `interface=`
 > works directly; on macOS the agent runs non-root, so use `replay_pcap` there.
 
+### Live from a remote bench (pipe / SSH)
+
+The network analog of `candump | cantools decode`: pipe a capture tool's pcap stream
+straight into `decode` over stdin — no files, decodes as it arrives. Ideal for a remote
+charger/HIL where you can't run the agent:
+
+```bash
+ssh root@DCMRevAHIL \
+  "tcpdump -i eth0 -U -s0 -w - 'ip6 or ether proto 0x88e1'" \
+  | uv run python main.py decode
+```
+
+The signals appear live in the Zelos app exactly as on the bench. Notes:
+- **Filter** must keep all three layers — `'ip6 or ether proto 0x88e1'` (SDP+V2GTP over
+  IPv6, SLAC over HomePlug AV). Don't filter on `tcp` alone or you lose SLAC and SDP.
+- **Interface**: `-i eth0` (Ethernet) and `-i any` (Linux cooked / SLL) both decode.
+- `-U` (unbuffered) makes it stream in real time rather than in blocks.
+
 ## Configuration
 
 | Field         | Purpose                                                            |

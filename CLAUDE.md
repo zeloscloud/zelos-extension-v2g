@@ -14,8 +14,8 @@ a pcap or live off the wire. Converter-first; live capture shares the same codec
 | `zelos_extension_v2g/exi/_lib/` | Prebuilt, committed shim libraries (one per platform). |
 | `zelos_extension_v2g/codec.py` | Records → Zelos trace events (the shared schema). |
 | `zelos_extension_v2g/converter.py` | `convert_v2g_pcap(in, out)` — pcap → `.trz`. |
-| `zelos_extension_v2g/live.py` | `sniff_into` / `run_live` — scapy sniff/replay → live source. |
-| `zelos_extension_v2g/cli/` | `app.py` (agent app-mode), `live.py` (standalone live CLI). |
+| `zelos_extension_v2g/live.py` | `sniff_into` (iface/replay) + `decode_stream_into` (stdin pcap) → live source. |
+| `zelos_extension_v2g/cli/` | `app.py` (agent app-mode), `live.py`, `decode.py` (stdin pipe). |
 | `native/v2g_din_shim.c` + `build.sh` | The C shim and its build script. |
 
 ## Decode is layered
@@ -31,6 +31,15 @@ This extension is deliberately **packet-in / row-out, like the CAN extension**: 
 maps to a frame on the wire and its decoded fields. Decode encoded bytes into human-readable
 fields wherever possible, but synthesize nothing across frames — no session-level summaries,
 health roll-ups, or inferred/defaulted values.
+
+**Ingest sources** all funnel through the same decode path: offline files (`pcap.decode_session`),
+live iface / pcap replay (`live.sniff_into` → scapy sniff), and a piped pcap stream on stdin
+(`live.decode_stream_into`, the `decode` subcommand — `tcpdump -w - | … decode`, the network
+analog of `candump | cantools decode`). scapy's `PcapReader` reads stdin directly; we did NOT
+build a custom pcap-framing parser (a design panel found no perf/flex benefit at V2G rates).
+`pcap.link_frame(pkt)` makes frame handling **link-layer-agnostic** — Ethernet *and* Linux
+cooked SLL/SLL2 — so `tcpdump -i eth0` and `tcpdump -i any` both decode (the IPv6 path works
+through either; only the SLAC branch needs the L2 ethertype/payload, which the helper supplies).
 
 The converter relies on `TraceWriter.close()` (called on `with`-exit) to **force-flush all
 buffered events** before returning — this needs **zelos-sdk >= 0.0.10a5** (pinned in

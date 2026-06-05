@@ -330,3 +330,43 @@ def test_replay_paces_by_capture_deltas(monkeypatch: pytest.MonkeyPatch) -> None
     # Frames were paced out to ~the capture span (a fast burst would schedule ~nothing).
     assert delays, "expected real-time pacing to schedule sleeps"
     assert max(delays) == pytest.approx(span, abs=2.0)
+
+
+def test_decode_stream_matches_batch() -> None:
+    """Decoding a pcap byte stream (as from `tcpdump -w -` piped to stdin) yields the
+    same records as the batch decoder — the `decode` subcommand's core path."""
+    import io
+
+    from zelos_extension_v2g.live import decode_stream_into
+
+    codec = _CountingCodec()
+    decode_stream_into(codec, source=io.BytesIO(FIXTURE.read_bytes()))
+
+    batch = decode_session(FIXTURE)
+    assert codec.slac == len(batch.slac)
+    assert codec.sdp == len(batch.sdp)
+    assert codec.messages == len(batch.messages)
+
+
+def test_cooked_sll_link_layer_decodes_slac() -> None:
+    """`tcpdump -i any` yields Linux cooked (SLL) frames, not Ethernet. A SLAC frame in
+    that encapsulation must still decode — the link-layer-agnostic seam."""
+    from scapy.layers.l2 import CookedLinux
+    from scapy.packet import Raw
+
+    from zelos_extension_v2g.pcap import link_frame
+    from zelos_extension_v2g.stream import V2gStreamDecoder
+
+    batch = decode_session(FIXTURE)
+    parm = next(f for f in batch.slac if f.name == "CM_SLAC_PARM.REQ")
+    sll = CookedLinux(proto=0x88E1) / Raw(parm.payload)  # same MME, cooked encapsulation
+
+    ethertype, payload, _src, _dst = link_frame(sll)
+    assert ethertype == 0x88E1
+    assert payload == parm.payload
+
+    got: list = []
+    sll.time = 1.0
+    V2gStreamDecoder(on_slac=got.append).feed_packet(sll)
+    assert len(got) == 1
+    assert got[0].name == "CM_SLAC_PARM.REQ"  # decoded the same as over Ethernet

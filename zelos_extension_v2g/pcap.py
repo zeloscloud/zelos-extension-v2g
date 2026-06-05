@@ -23,7 +23,7 @@ from pathlib import Path
 
 from scapy.layers.inet import TCP, UDP
 from scapy.layers.inet6 import IPv6
-from scapy.layers.l2 import Ether
+from scapy.layers.l2 import CookedLinux, CookedLinuxV2, Ether
 from scapy.utils import PcapReader
 
 from . import protocol as p
@@ -73,6 +73,24 @@ class DecodedSession:
 
 
 # ─── per-layer helpers ─────────────────────────────────────────────────────
+
+
+def link_frame(pkt) -> tuple[int, bytes, str, str] | None:
+    """Return ``(ethertype, l2_payload, src_mac, dst_mac)`` for an Ethernet or Linux
+    "cooked" (SLL / SLL2) frame, so captures from ``tcpdump -i <eth>`` (Ethernet) and
+    ``tcpdump -i any`` (cooked) both decode. Returns ``None`` for any other link layer
+    — the IPv6 path still works regardless via ``pkt[IPv6]``. Cooked frames carry no
+    destination MAC, so ``dst_mac`` is empty there.
+    """
+    if Ether in pkt:
+        e = pkt[Ether]
+        return e.type, bytes(e.payload), e.src, e.dst
+    cooked = pkt.getlayer(CookedLinux) or pkt.getlayer(CookedLinuxV2)
+    if cooked is not None:
+        src = cooked.src
+        src_mac = src.hex(":") if isinstance(src, (bytes, bytearray)) else str(src)
+        return cooked.proto, bytes(cooked.payload), src_mac, ""
+    return None
 
 
 def _parse_slac(ts: float, payload: bytes, src_mac: str, dst_mac: str) -> SlacFrame | None:
@@ -161,13 +179,11 @@ def decode_session(path: str | Path) -> DecodedSession:
 
     with PcapReader(str(path)) as reader:
         for pkt in reader:
-            if Ether not in pkt:
-                continue
             ts = float(pkt.time)
-            eth = pkt[Ether]
-
-            if eth.type == p.ETHERTYPE_HOMEPLUG_AV:
-                slac = _parse_slac(ts, bytes(eth.payload), eth.src, eth.dst)
+            ll = link_frame(pkt)
+            if ll is not None and ll[0] == p.ETHERTYPE_HOMEPLUG_AV:
+                _, payload, src, dst = ll
+                slac = _parse_slac(ts, payload, src, dst)
                 if slac is not None:
                     session.slac.append(slac)
                 continue

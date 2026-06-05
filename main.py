@@ -29,6 +29,7 @@ def cli(ctx: click.Context) -> None:
 
 cli.add_command(cli_commands.convert)
 cli.add_command(cli_commands.live)
+cli.add_command(cli_commands.decode)
 
 
 if __name__ == "__main__":
