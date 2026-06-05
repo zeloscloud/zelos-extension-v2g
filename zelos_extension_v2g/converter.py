@@ -8,7 +8,6 @@ never mixes with any live session.
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 
 import zelos_sdk
@@ -19,12 +18,6 @@ from .pcap import decode_session
 logger = logging.getLogger(__name__)
 
 SUPPORTED_FORMATS = {".pcap", ".pcapng"}
-
-# The TraceSource → TraceWriter pipeline drains on a background thread; the writer's
-# close() does not block for it, and the SDK exposes no explicit flush. Without a short
-# settle, a fast conversion can close the file before the events are written (the rows
-# are silently lost). Same workaround the CAN converter uses.
-_FLUSH_SECONDS = 2.0
 
 
 def resolve_trz_output(input_file: Path, output: Path | None, overwrite: bool) -> Path:
@@ -70,10 +63,11 @@ def convert_v2g_pcap(input_file: Path, output_file: Path) -> ConversionStats:
 
     logger.info("Converting %s -> %s", input_file, output_file)
     converter_namespace = zelos_sdk.TraceNamespace("converter")
+    # Exiting the context calls TraceWriter.close(), which force-flushes all buffered
+    # events before returning (zelos-sdk >= 0.0.10a5), so no post-write settle is needed.
     with zelos_sdk.TraceWriter(str(output_file), namespace=converter_namespace):
         codec = V2gCodec(namespace=converter_namespace)
         stats = codec.process(session)
-        time.sleep(_FLUSH_SECONDS)  # let the writer drain before close() (see above)
 
     logger.info("Conversion complete: %s", stats.to_dict())
     return stats

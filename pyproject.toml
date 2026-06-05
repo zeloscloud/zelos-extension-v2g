@@ -19,7 +19,9 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "zelos-sdk",
+    # >= 0.0.10a5: TraceWriter.close() force-flushes buffered events, so the converter
+    # needs no post-write settle. Earlier stable (0.0.9) drops rows on fast conversions.
+    "zelos-sdk>=0.0.10a5",
     "rich-click>=1.8.0",
     "scapy>=2.5.0",
 ]

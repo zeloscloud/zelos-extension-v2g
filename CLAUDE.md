@@ -32,10 +32,12 @@ maps to a frame on the wire and its decoded fields. Decode encoded bytes into hu
 fields wherever possible, but synthesize nothing across frames — no session-level summaries,
 health roll-ups, or inferred/defaulted values.
 
-The converter `time.sleep(_FLUSH_SECONDS)` after `process()` is **load-bearing**: the
-TraceSource→TraceWriter pipeline drains on a background thread and `close()` does not block
-for it (no explicit flush API). Without the settle, a fast conversion closes the file before
-rows are written and they're silently lost. Do not remove it.
+The converter relies on `TraceWriter.close()` (called on `with`-exit) to **force-flush all
+buffered events** before returning — this needs **zelos-sdk >= 0.0.10a5** (pinned in
+pyproject). On older SDKs `close()` did not drain the background write pipeline, so a fast
+conversion silently lost rows and a `time.sleep` settle was required; the alpha's drain
+removed that hack. If you ever downgrade the SDK below 0.0.10a5, fast conversions will write
+empty traces — re-add a flush settle or, better, keep the floor.
 
 `codec.emit_message` dispatches per dialect: `decode_din(exi) or decode_iso2(exi) or
 decode_sap(exi)`. The dialects are mutually exclusive — a message of one dialect returns
