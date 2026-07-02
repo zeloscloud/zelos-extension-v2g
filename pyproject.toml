@@ -24,6 +24,11 @@ dependencies = [
     "zelos-sdk>=0.0.10a5",
     "rich-click>=1.8.0",
     "scapy>=2.5.0",
+    # Shared Rust CAN codec (raw + DBC frame cracking) — used for SocketCAN frames
+    # found in a capture. Prebuilt wheel, no build step. >= 0.0.7a0: optional DBC
+    # (raw-only decode with no database) + macOS/Windows wheels. NOTE: until those
+    # wheels are on PyPI, local dev installs a locally-built wheel (see CLAUDE.md).
+    "zelos-can>=0.0.7a0",
 ]
 
 [project.scripts]
