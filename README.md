@@ -71,8 +71,10 @@ loaded via stdlib `ctypes` (see [Architecture](#architecture)).
 # V2G / CAN / both — auto-detected per frame
 uv run python main.py convert session.pcapng -o session.trz
 
-# decode CAN signals too (raw CAN frames are always kept)
-uv run python main.py convert combined.pcapng --dbc vehicle.dbc -o session.trz
+# decode CAN signals too (raw CAN frames are always kept). A ready-made combined
+# CAN+V2G example ships in tests/files/ (see tests/files/README.md):
+uv run python main.py convert tests/files/combined_can_v2g.pcapng \
+  --dbc tests/files/example.dbc -o session.trz
 
 # or as an agent action: "Convert Pcap"
 ```
@@ -111,7 +113,7 @@ straight into `decode` over stdin — no files, decodes as it arrives. Ideal for
 charger/HIL where you can't run the agent:
 
 ```bash
-ssh root@DCMRevAHIL \
+ssh root@charger-bench \
   "tcpdump -i eth0 -U -s0 -w - 'ip6 or ether proto 0x88e1'" \
   | uv run python main.py decode
 ```
