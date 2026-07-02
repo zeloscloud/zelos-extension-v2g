@@ -47,7 +47,7 @@ Each decoded field carries its real unit (V, A, %, W, Wh) and enum value tables
 - **Raw frames (always):** every SocketCAN frame becomes a `can_raw/*` row — arbitration
   id, flags, dlc, and raw data bytes, as seen on the bus (the `candump` view).
 - **Decoded signals (with a `.dbc`):** pass `--dbc vehicle.dbc` and matching frames also
-  decode into named `can/<id>_<message>` signal events — with units, scaling, value
+  decode into named `can_codec/<id>_<message>` signal events — with units, scaling, value
   tables, and multiplexing — using the shared Rust `zelos-can` codec.
 
 > Not yet wired (the codec supports them; deferred until needed): ISO 15118-20, and
