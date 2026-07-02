@@ -23,6 +23,9 @@ from zelos_extension_v2g.socketcan import parse_socketcan
 
 FILES = Path(__file__).parent / "files"
 V2G_FIXTURE = FILES / "2024-04-20_ModelY_pyPLC_stop_in_precharge.pcapng"
+# Combined CAN+V2G fixture + its database (see tests/files/make_combined_fixture.py).
+COMBINED_FIXTURE = FILES / "combined_can_v2g.pcapng"
+EXAMPLE_DBC = FILES / "example.dbc"
 
 _MINI_DBC = 'VERSION ""\n\nBS_:\n\nBU_: ECU\n\nBO_ 320 Msg320: 2 ECU\n SG_ Speed : 0|16@1+ (0.1,0) [0|6553.5] "km/h" ECU\n'  # noqa: E501
 
@@ -134,55 +137,7 @@ def test_combined_shares_one_writer(tmp_path: Path) -> None:
     assert any(s.startswith("can") for s in sources)
 
 
-# ─── combined CAN+V2G end-to-end (generate a 2-interface pcapng, query both) ──
-
-
-def _pcapng_shb() -> bytes:
-    body = struct.pack("<I", 0x1A2B3C4D) + struct.pack("<HH", 1, 0) + struct.pack("<q", -1)
-    total = 12 + len(body)
-    return struct.pack("<II", 0x0A0D0D0A, total) + body + struct.pack("<I", total)
-
-
-def _pcapng_idb(linktype: int) -> bytes:
-    body = struct.pack("<HHI", linktype, 0, 0)  # linktype, reserved, snaplen(0 = unlimited)
-    total = 12 + len(body)
-    return struct.pack("<II", 0x00000001, total) + body + struct.pack("<I", total)
-
-
-def _pcapng_epb(iface_id: int, ts: float, data: bytes) -> bytes:
-    ts_us = int(round(ts * 1_000_000))
-    hi, lo = (ts_us >> 32) & 0xFFFFFFFF, ts_us & 0xFFFFFFFF
-    pad = (-len(data)) % 4
-    body = struct.pack("<IIIII", iface_id, hi, lo, len(data), len(data)) + data + b"\x00" * pad
-    total = 12 + len(body)
-    return struct.pack("<II", 0x00000006, total) + body + struct.pack("<I", total)
-
-
-def _write_combined_pcapng(path: Path, v2g_src: Path, can_specs) -> None:
-    """Write a 2-interface pcapng: iface 0 = SocketCAN (227), iface 1 = Ethernet (1).
-
-    V2G Ethernet frames are copied verbatim from ``v2g_src`` (a real V2G capture);
-    ``can_specs`` = list of ``(id, extended, dlc, data)`` spread across the V2G span,
-    so CAN and V2G share one timeline — exactly the customer's combined capture.
-    """
-    from scapy.utils import PcapReader
-
-    with PcapReader(str(v2g_src)) as reader:
-        v2g = [(float(p.time), bytes(p)) for p in reader]
-    ts_min = min(t for t, _ in v2g)
-    ts_max = max(t for t, _ in v2g)
-    events = [(t, 1, d) for t, d in v2g]
-    for i, (cid, ext, dlc, data) in enumerate(can_specs):
-        ts = ts_min + (ts_max - ts_min) * (i + 1) / (len(can_specs) + 1)
-        events.append((ts, 0, _socketcan_record(cid, ext, dlc, data)))
-    events.sort(key=lambda e: e[0])
-
-    with path.open("wb") as f:
-        f.write(_pcapng_shb())
-        f.write(_pcapng_idb(227))  # iface 0 — SocketCAN
-        f.write(_pcapng_idb(1))  # iface 1 — Ethernet
-        for ts, iface, data in events:
-            f.write(_pcapng_epb(iface, ts, data))
+# ─── combined CAN+V2G end-to-end (committed 2-interface fixture, query both) ───
 
 
 def _query_values(trz: Path, suffixes: list[str]) -> dict[str, list]:
@@ -210,30 +165,42 @@ def _query_values(trz: Path, suffixes: list[str]) -> dict[str, list]:
 
 
 def test_combined_capture_queries_both_families(tmp_path: Path) -> None:
-    """E2E: a capture with BOTH CAN and V2G converts to one trace, and real CAN
-    and V2G values are queryable *simultaneously* from it, on one timeline."""
-    pytest.importorskip("pyarrow")
-    combined = tmp_path / "combined.pcapng"
-    # five 0x140 frames (Speed = 10.0 km/h under mini.dbc) + two unknown-id frames
-    can_specs = [(0x140, False, 2, b"\x64\x00")] * 5 + [(0x200, False, 1, b"\x01")] * 2
-    _write_combined_pcapng(combined, V2G_FIXTURE, can_specs)
-    dbc = tmp_path / "mini.dbc"
-    dbc.write_text(_MINI_DBC)
+    """E2E: the committed combined CAN+V2G capture converts to one trace, and real
+    CAN and V2G values are queryable *simultaneously* from it, on one timeline.
 
+    This also verifies proper CAN-DBC decoding against ``example.dbc``: scaling,
+    signed values, and multiple messages (see make_combined_fixture.py for the
+    known frame contents)."""
+    pytest.importorskip("pyarrow")
     out = tmp_path / "combined.trz"
-    stats = convert_capture(combined, out, dbc=dbc)
+    stats = convert_capture(COMBINED_FIXTURE, out, dbc=EXAMPLE_DBC)
 
     # both protocols decoded from the one capture
     assert stats.v2g.messages == 274
     assert stats.v2g.protocol == "DIN 70121"
-    assert stats.can_frames == 7
-    assert stats.can_decoded_frames == 5  # the five 0x140 frames match Msg320
+    assert stats.can_frames == 4
+    assert stats.can_decoded_frames == 3  # 2x BMS_Status + 1x VCU_ChargeCommand (0x7FF unknown)
 
-    # both queryable by value from the one trace, on the shared clock
     vals = _query_values(
         out,
-        ["v2g/cable_check_req.soc", "can_raw/can_raw.arbitration_id", "can/0140_Msg320.Speed"],
+        [
+            "v2g/cable_check_req.soc",
+            "can_raw/can_raw.arbitration_id",
+            "can/0100_BMS_Status.PackVoltage",
+            "can/0100_BMS_Status.PackCurrent",
+            "can/0100_BMS_Status.SoC",
+            "can/0100_BMS_Status.ChargeState",
+            "can/0200_VCU_ChargeCommand.TargetVoltage",
+        ],
     )
+    # V2G decodes
     assert vals["v2g/cable_check_req.soc"], "no V2G SoC values queried back"
-    assert 0x140 in vals["can_raw/can_raw.arbitration_id"], "CAN frame id 0x140 not in trace"
-    assert 10.0 in [round(v, 1) for v in vals["can/0140_Msg320.Speed"]], "decoded CAN Speed missing"
+    # CAN raw frames present (including the DBC-unknown 0x7FF)
+    ids = set(vals["can_raw/can_raw.arbitration_id"])
+    assert {0x100, 0x200, 0x7FF} <= ids, f"missing raw CAN ids: {sorted(ids)}"
+    # CAN-DBC decode: scaling (0.1 / 0.5), signed current, and the enum field
+    assert 400.0 in [round(v, 1) for v in vals["can/0100_BMS_Status.PackVoltage"]]
+    assert -50.0 in [round(v, 1) for v in vals["can/0100_BMS_Status.PackCurrent"]]  # signed
+    assert 55.0 in [round(v, 1) for v in vals["can/0100_BMS_Status.SoC"]]
+    assert 2 in vals["can/0100_BMS_Status.ChargeState"]  # 2 == "Charging" in example.dbc
+    assert 420.0 in [round(v, 1) for v in vals["can/0200_VCU_ChargeCommand.TargetVoltage"]]
