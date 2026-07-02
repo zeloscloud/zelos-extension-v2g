@@ -23,7 +23,7 @@ class CanIngest:
     """A ``zelos-can`` ``CanDecoder`` bound to ``namespace``.
 
     Emits raw ``can_raw/*`` frame rows always; when ``dbc`` is supplied, also
-    emits decoded ``can/<message>`` signal rows.
+    emits decoded ``can_codec/<message>`` signal rows.
     """
 
     def __init__(self, namespace: zelos_sdk.TraceNamespace, dbc: str | None = None) -> None:
@@ -31,7 +31,10 @@ class CanIngest:
         # ``source_name`` would bind the process-default namespace, and a
         # namespaced ``TraceWriter`` would then capture nothing (empty trace).
         kwargs: dict = {
-            "source": zelos_sdk.TraceSource("can", namespace=namespace),
+            # Source names match the CAN extension's default (decoded "can_codec",
+            # raw "can_raw"). A capture is treated as a single CAN bus; per-bus
+            # naming for multi-interface captures is a future enhancement.
+            "source": zelos_sdk.TraceSource("can_codec", namespace=namespace),
             "raw_source": zelos_sdk.TraceSource("can_raw", namespace=namespace),
             # Keep raw frames even when a DBC is decoding signals (with a DBC the
             # decoder would otherwise default this off).

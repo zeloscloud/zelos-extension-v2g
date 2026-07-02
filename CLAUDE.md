@@ -60,7 +60,7 @@ install; nothing is published to PyPI** — keep it that way.
 
 `convert_capture` reads a capture once and dispatches per frame: no `link_frame` → SocketCAN →
 `zelos_can.CanDecoder`; Ethernet/IPv6/HomePlug-AV → `V2gStreamDecoder`. Both write **one shared
-`TraceNamespace`**, so CAN (`can_raw/*`, plus decoded `can/<id>_<msg>` with a DBC) and V2G
+`TraceNamespace`**, so CAN (`can_raw/*`, plus decoded `can_codec/<id>_<msg>` with a DBC) and V2G
 (`v2g/*`) land in one time-aligned `.trz`. CAN-only, V2G-only, and combined captures all fall
 out of the same pass.
 

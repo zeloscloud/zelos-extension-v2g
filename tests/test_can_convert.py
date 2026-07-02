@@ -186,11 +186,11 @@ def test_combined_capture_queries_both_families(tmp_path: Path) -> None:
         [
             "v2g/cable_check_req.soc",
             "can_raw/can_raw.arbitration_id",
-            "can/0100_BMS_Status.PackVoltage",
-            "can/0100_BMS_Status.PackCurrent",
-            "can/0100_BMS_Status.SoC",
-            "can/0100_BMS_Status.ChargeState",
-            "can/0200_VCU_ChargeCommand.TargetVoltage",
+            "can_codec/0100_BMS_Status.PackVoltage",
+            "can_codec/0100_BMS_Status.PackCurrent",
+            "can_codec/0100_BMS_Status.SoC",
+            "can_codec/0100_BMS_Status.ChargeState",
+            "can_codec/0200_VCU_ChargeCommand.TargetVoltage",
         ],
     )
     # V2G decodes
@@ -199,8 +199,8 @@ def test_combined_capture_queries_both_families(tmp_path: Path) -> None:
     ids = set(vals["can_raw/can_raw.arbitration_id"])
     assert {0x100, 0x200, 0x7FF} <= ids, f"missing raw CAN ids: {sorted(ids)}"
     # CAN-DBC decode: scaling (0.1 / 0.5), signed current, and the enum field
-    assert 400.0 in [round(v, 1) for v in vals["can/0100_BMS_Status.PackVoltage"]]
-    assert -50.0 in [round(v, 1) for v in vals["can/0100_BMS_Status.PackCurrent"]]  # signed
-    assert 55.0 in [round(v, 1) for v in vals["can/0100_BMS_Status.SoC"]]
-    assert 2 in vals["can/0100_BMS_Status.ChargeState"]  # 2 == "Charging" in example.dbc
-    assert 420.0 in [round(v, 1) for v in vals["can/0200_VCU_ChargeCommand.TargetVoltage"]]
+    assert 400.0 in [round(v, 1) for v in vals["can_codec/0100_BMS_Status.PackVoltage"]]
+    assert -50.0 in [round(v, 1) for v in vals["can_codec/0100_BMS_Status.PackCurrent"]]  # signed
+    assert 55.0 in [round(v, 1) for v in vals["can_codec/0100_BMS_Status.SoC"]]
+    assert 2 in vals["can_codec/0100_BMS_Status.ChargeState"]  # 2 == "Charging" in example.dbc
+    assert 420.0 in [round(v, 1) for v in vals["can_codec/0200_VCU_ChargeCommand.TargetVoltage"]]
