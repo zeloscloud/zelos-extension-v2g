@@ -1,13 +1,18 @@
 # V2G
 
-> Decode ISO 15118 / DIN 70121 EV-charging communication into Zelos traces — from a
-> packet capture or live off the wire.
+> Decode ISO 15118 / DIN 70121 EV-charging communication (and any SocketCAN traffic in
+> the same capture) into Zelos traces — from a packet capture or live off the wire.
 
 A [Zelos](https://zeloscloud.io) agent extension. It turns the V2G conversation
 between an electric vehicle (EVCC) and a charger (SECC) into plottable, queryable
 signals and a searchable message timeline — the same data you would read in Wireshark
 with the dsV2Gshark plugin, but as first-class Zelos traces you can plot, correlate
 with other signals, query from the CLI, and share as a `.trz`.
+
+It also decodes **CAN** frames captured alongside V2G (Wireshark/tcpdump on a SocketCAN
+interface). A capture carrying **both** — e.g. a bench recording of a charging session
+next to the vehicle bus — converts to **one time-aligned `.trz`** with `can*/*` and
+`v2g/*` on the same clock, so you can correlate the CAN bus with the charging handshake.
 
 ## What it decodes
 
@@ -38,6 +43,13 @@ does not synthesize cross-frame "session health" summaries or roll-ups.
 Each decoded field carries its real unit (V, A, %, W, Wh) and enum value tables
 (response codes, EVSE status), so plots and queries read in engineering terms.
 
+**CAN (SocketCAN, in the same capture):**
+- **Raw frames (always):** every SocketCAN frame becomes a `can_raw/*` row — arbitration
+  id, flags, dlc, and raw data bytes, as seen on the bus (the `candump` view).
+- **Decoded signals (with a `.dbc`):** pass `--dbc vehicle.dbc` and matching frames also
+  decode into named `can_codec/<id>_<message>` signal events — with units, scaling, value
+  tables, and multiplexing — using the shared Rust `zelos-can` codec.
+
 > Not yet wired (the codec supports them; deferred until needed): ISO 15118-20, and
 > TLS-encrypted / Plug & Charge certificate sessions. Captures using these still decode
 > at Layer 1 and for any cleartext messages.
@@ -56,13 +68,19 @@ loaded via stdlib `ctypes` (see [Architecture](#architecture)).
 ### Convert a capture (offline)
 
 ```bash
-# CLI
-uv run python main.py convert session.pcap -o session.trz
+# V2G / CAN / both — auto-detected per frame
+uv run python main.py convert session.pcapng -o session.trz
+
+# decode CAN signals too (raw CAN frames are always kept). A ready-made combined
+# CAN+V2G example ships in tests/files/ (see tests/files/README.md):
+uv run python main.py convert tests/files/combined_can_v2g.pcapng \
+  --dbc tests/files/example.dbc -o session.trz
 
 # or as an agent action: "Convert Pcap"
 ```
 
-Accepts `.pcap` and `.pcapng`. Open the resulting `.trz` in the Zelos app, or query it:
+Accepts `.pcap` and `.pcapng`. A capture with both CAN and V2G produces one time-aligned
+trace. Open the resulting `.trz` in the Zelos app, or query it:
 
 ```bash
 zelos trace signals session.trz                 # list decoded signals
@@ -95,7 +113,7 @@ straight into `decode` over stdin — no files, decodes as it arrives. Ideal for
 charger/HIL where you can't run the agent:
 
 ```bash
-ssh root@DCMRevAHIL \
+ssh root@charger-bench \
   "tcpdump -i eth0 -U -s0 -w - 'ip6 or ether proto 0x88e1'" \
   | uv run python main.py decode
 ```
@@ -130,6 +148,11 @@ running platform, decode degrades gracefully to Layer 1.
 Capture parsing uses [scapy](https://scapy.net) (pcap + pcapng); V2GTP framing, TCP
 reassembly, and SLAC body decode are pure-Python. The offline converter and the live
 path share one codec, so they emit identical schemas.
+
+CAN frames are decoded by the shared [`zelos-can`](https://pypi.org/project/zelos-can/)
+codec (raw logging + DBC signal decode, in Rust) — the same engine as the standalone
+Zelos CAN extension, so decoded signals are consistent across both. This extension only
+adds the SocketCAN pcap parsing and routes frames to it.
 
 To rebuild the native shim for a platform: `bash native/build.sh` (needs `cmake`, a C
 compiler, and `git`). See [`native/README.md`](native/README.md).

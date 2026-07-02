@@ -1,0 +1,21 @@
+VERSION "zelos-extension-v2g example CAN database"
+
+
+BS_:
+
+BU_: BMS VCU
+
+
+BO_ 256 BMS_Status: 8 BMS
+ SG_ PackVoltage : 0|16@1+ (0.1,0) [0|6553.5] "V" VCU
+ SG_ PackCurrent : 16|16@1- (0.1,0) [-3276.8|3276.7] "A" VCU
+ SG_ SoC : 32|8@1+ (0.5,0) [0|100] "%" VCU
+ SG_ ChargeState : 40|8@1+ (1,0) [0|255] "" VCU
+
+BO_ 512 VCU_ChargeCommand: 4 VCU
+ SG_ TargetVoltage : 0|16@1+ (0.1,0) [0|6553.5] "V" BMS
+ SG_ TargetCurrent : 16|16@1+ (0.1,0) [0|6553.5] "A" BMS
+
+
+
+VAL_ 256 ChargeState 0 "Idle" 1 "Precharge" 2 "Charging" 3 "Complete" 4 "Fault" ;

@@ -14,7 +14,7 @@ from typing import Any
 
 import zelos_sdk
 
-from .converter import convert_v2g_pcap, resolve_trz_output
+from .converter import convert_capture, resolve_trz_output
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +39,11 @@ class V2gConverter:
         while self.running:
             time.sleep(0.5)
 
-    @zelos_sdk.action("Convert Pcap", "Convert an ISO 15118 / DIN 70121 V2G pcap to a Zelos trace")
+    @zelos_sdk.action("Convert Pcap", "Convert a CAN / V2G capture to a Zelos trace")
     @zelos_sdk.action.text(
         "input_path",
         title="Input pcap",
-        description="Path to a V2G capture (.pcap)",
+        description="Path to a capture (.pcap/.pcapng) — CAN, V2G, or both",
         widget="file-picker",
     )
     @zelos_sdk.action.text(
@@ -54,20 +54,29 @@ class V2gConverter:
         description="Optional; defaults to the input name with a .trz extension",
         placeholder="e.g. /path/to/session.trz",
     )
+    @zelos_sdk.action.text(
+        "dbc_path",
+        required=False,
+        default="",
+        title="CAN database (.dbc)",
+        description="Optional; decode CAN frames into named signals (raw frames are always kept)",
+        widget="file-picker",
+    )
     @zelos_sdk.action.boolean(
         "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
     )
     def convert_pcap(
-        self, input_path: str, output_path: str = "", overwrite: bool = False
+        self, input_path: str, output_path: str = "", dbc_path: str = "", overwrite: bool = False
     ) -> dict[str, Any]:
-        """Convert a V2G pcap to .trz and return conversion statistics."""
+        """Convert a CAN/V2G capture to .trz and return conversion statistics."""
         try:
             input_file = Path(input_path).expanduser().resolve()
             if not input_file.exists():
                 return {"status": "error", "message": f"Input file not found: {input_file}"}
             output = Path(output_path).expanduser().resolve() if output_path else None
+            dbc = Path(dbc_path).expanduser().resolve() if dbc_path else None
             output_file = resolve_trz_output(input_file, output, overwrite)
-            stats = convert_v2g_pcap(input_file, output_file)
+            stats = convert_capture(input_file, output_file, dbc=dbc)
             return {
                 "status": "success",
                 "input_file": str(input_file),
