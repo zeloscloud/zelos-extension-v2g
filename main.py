@@ -2,6 +2,7 @@
 """Zelos V2G extension — ISO 15118 / DIN 70121 pcap decode and trace conversion."""
 
 import logging
+import time
 
 import rich_click as click
 
@@ -11,7 +12,13 @@ click.rich_click.USE_RICH_MARKUP = True
 click.rich_click.USE_MARKDOWN = True
 click.rich_click.SHOW_ARGUMENTS = True
 
-logging.basicConfig(level=logging.INFO)
+# UTC ISO 8601 with ms, matching the SDK's Rust tracing lines in the same log stream
+logging.Formatter.converter = time.gmtime
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03dZ %(levelname)5s %(name)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 
 
 @click.group(invoke_without_command=True)
