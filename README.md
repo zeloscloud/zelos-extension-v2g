@@ -11,8 +11,8 @@ with other signals, query from the CLI, and share as a `.trz`.
 
 It also decodes **CAN** frames captured alongside V2G (Wireshark/tcpdump on a SocketCAN
 interface). A capture carrying **both** — e.g. a bench recording of a charging session
-next to the vehicle bus — converts to **one time-aligned `.trz`** with `can*/*` and
-`v2g/*` on the same clock, so you can correlate the CAN bus with the charging handshake.
+next to the vehicle bus — converts to **one time-aligned `.trz`**, CAN beside the V2G events
+on the same clock, so you can correlate the CAN bus with the charging handshake.
 
 ## What it decodes
 
@@ -44,10 +44,10 @@ Each decoded field carries its real unit (V, A, %, W, Wh) and enum value tables
 (response codes, EVSE status), so plots and queries read in engineering terms.
 
 **CAN (SocketCAN, in the same capture):**
-- **Raw frames (always):** every SocketCAN frame becomes a `can_raw/*` row — arbitration
+- **Raw frames (always):** every SocketCAN frame becomes a `CAN/Frame` row — arbitration
   id, flags, dlc, and raw data bytes, as seen on the bus (the `candump` view).
 - **Decoded signals (with a `.dbc`):** pass `--dbc vehicle.dbc` and matching frames also
-  decode into named `can_codec/<id>_<message>` signal events — with units, scaling, value
+  decode into named `CAN/<id>_<message>` signal events — with units, scaling, value
   tables, and multiplexing — using the shared Rust `zelos-can` codec.
 
 > Not yet wired (the codec supports them; deferred until needed): ISO 15118-20, and
@@ -76,7 +76,7 @@ uv run python main.py convert session.pcapng -o session.trz
 uv run python main.py convert tests/files/combined_can_v2g.pcapng \
   --dbc tests/files/example.dbc -o session.trz
 
-# or as an agent action: "Convert Pcap"
+# or the V2G/convert_pcap action (runs without the extension started)
 ```
 
 Accepts `.pcap` and `.pcapng`. A capture with both CAN and V2G produces one time-aligned
@@ -84,27 +84,27 @@ trace. Open the resulting `.trz` in the Zelos app, or query it:
 
 ```bash
 zelos trace signals session.trz                 # list decoded signals
-zelos trace query  session.trz -s '*/v2g/current_demand_res.evse_present_voltage'
+zelos trace query  session.trz -s '*/V2G/session/current_demand_res.evse_present_voltage'
 ```
 
 ### Live capture
 
-Configure the extension with an `interface` to sniff a bridged green-PHY link, or a
-`replay_pcap` to stream a capture through the live path (handy for testing without
-hardware). Decoded signals stream to the agent in real time:
+Add one `interfaces[]` entry per bridged green-PHY interface (Auto-configure fills in
+every interface that is up), or set `advanced.replay_pcap` to stream a capture through
+the live path without hardware. Decoded signals stream to the agent in real time:
 
 ```bash
-zelos extensions start local.zelos-extension-v2g \
-  --config '{"interface": "eth0", "source_name": "v2g"}'
-
-zelos live signals
-zelos live query -s '*/v2g/current_demand_req.ev_target_current' --last 30s
+zelos live events
+zelos live query -s '*/V2G/eth0/current_demand_req.ev_target_current' --last 30s
 ```
 
-Standalone (no agent): `uv run python main.py live --iface eth0` or `--replay file.pcap`.
+Standalone (no agent config): `uv run python main.py live --iface eth0` or `--replay file.pcap`.
 
-> Live capture needs raw-socket permission. On a permissioned Linux deploy `interface=`
-> works directly; on macOS the agent runs non-root, so use `replay_pcap` there.
+> Live capture needs raw-socket rights on the agent's machine. The
+> `V2G/check_permissions` action opens a capture and, if refused, returns the fix
+> (macOS: `/dev/bpf` access via ChmodBPF; Linux: `setcap cap_net_raw,cap_net_admin` on
+> the extension's interpreter, or root). An interface that fails to open is logged and
+> skipped; the extension exits only if none opens.
 
 ### Live from a remote bench (pipe / SSH)
 
@@ -126,12 +126,48 @@ The signals appear live in the Zelos app exactly as on the bench. Notes:
 
 ## Configuration
 
-| Field         | Purpose                                                            |
-|---------------|-------------------------------------------------------------------|
-| `interface`   | Network interface(s) to sniff live (comma-separated for several). |
-| `replay_pcap` | A pcap/pcapng to replay through the live path instead of sniffing.|
-| `source_name` | Trace source name (default `v2g`).                                |
-| `log_level`   | `DEBUG` / `INFO` / `WARNING` / `ERROR`.                           |
+| Field | Purpose |
+|-------|---------|
+| `interfaces[].interface` | Interface to capture (picked from `V2G/list_interfaces`). |
+| `interfaces[].name` | Branch name (default: the interface, catalog-sanitized). Must be unique. |
+| `advanced.prefix` | Shared source name (default `V2G`). Clear it for one source per branch. |
+| `advanced.promiscuous` | Capture third-party unicast (default on; off for drivers that refuse it). |
+| `advanced.log_packets` | Raw `zelos.packet.v1` row per frame at `<name>/packets` (default on). |
+| `advanced.log_frames` | Keep frame bytes in the packet rows (default on). |
+| `advanced.stored_frame_bytes` | Cap on stored frame bytes (default null: every byte). |
+| `advanced.replay_pcap` | Replay a capture instead of the interface list; branch = file stem. |
+| `advanced.dbc_file` | CAN database for SocketCAN frames in the replay file (empty: raw frames only). |
+| `advanced.log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR`. |
+
+Live packet rows cover what the V2G capture filter passes (IPv6 + HomePlug AV). For a full
+wire view, run the Packet extension on the same interface.
+
+## Trace layout
+
+One branch per interface (live) or per file (replay, convert), `<name>` below:
+
+| Event | Contents |
+|-------|----------|
+| `<prefix>/<name>/slac`, `slac_attenuation`, `slac_match` | SLAC frames and their per-frame decode. |
+| `<prefix>/<name>/sdp` | SDP discovery. |
+| `<prefix>/<name>/message` | V2GTP message timeline, raw EXI per row. |
+| `<prefix>/<name>/<message>` | Decoded fields, e.g. `pre_charge_res`, `current_demand_req`. |
+| `<prefix>/<name>/packets` | Every frame as `zelos.packet.v1` (the Packet panel). |
+| `<prefix>/<name>/CAN/Frame` | SocketCAN frames in a converted, replayed or piped capture (`zelos.can.frame.v1`). |
+| `<prefix>/<name>/CAN/<id>_<message>` | DBC-decoded CAN signals (`--dbc` / `advanced.dbc_file`). |
+
+With the prefix cleared, `<name>` is the source and V2G events are unprefixed; the packet
+and CAN events keep their `<name>/` segment (`<name>/<name>/packets`). Logs land at
+`<prefix>/log` (`v2g_log/log` when cleared).
+
+## Actions
+
+| Action | Purpose |
+|--------|---------|
+| `V2G/auto_config` | Config with every up, non-loopback interface (standalone). |
+| `V2G/list_interfaces` | Interface choices for the config form (standalone). |
+| `V2G/convert_pcap` | Capture to `.trz`, optional DBC and packet rows (standalone). |
+| `V2G/check_permissions` | Try a capture; on refusal return the OS-specific fix. |
 
 ## Architecture
 

@@ -1,6 +1,8 @@
 """ISO 15118 / DIN 70121 V2G (EV-charger) communication decode and pcap-to-trace conversion."""
 
-from .converter import convert_v2g_pcap
-from .extension import V2gConverter
+#: Action namespace for both the live registration (`zelos_sdk.init(name=...)`) and
+#: the at-rest inventory dumped from `main.py`, which re-exports it. Nothing binds
+#: the two, so a mismatch ships the actions under two unrelated paths.
+ACTION_PREFIX = "V2G"
 
-__all__ = ["V2gConverter", "convert_v2g_pcap"]
+__all__ = ["ACTION_PREFIX"]

@@ -1,14 +1,10 @@
 """Feed SocketCAN frames into zelos-can's Rust ``CanDecoder``.
 
-The CAN frame cracking (raw logging + DBC signal decode, value tables,
-multiplexing, cantools-parity) lives in the shared ``zelos-can`` package — we do
-**not** reimplement it here. This module is only the thin glue that binds a
-``CanDecoder`` to a caller-provided :class:`~zelos_sdk.TraceNamespace` and hands
-it parsed frames, so CAN rows land in the same ``.trz`` as the V2G rows.
-
-Requires ``zelos-can >= 0.0.7a0``: the DBC is optional there (a decoder built
-with no database logs raw frames only), which is how a DBC-less capture is
-handled — no empty-DBC placeholder needed.
+CAN frame cracking (raw logging + DBC signal decode, value tables, multiplexing)
+lives in the shared ``zelos-can`` package; this is only the glue that nests a
+capture's CAN rows under its V2G branch: ``<name>/CAN/Frame`` (raw,
+``zelos.can.frame.v1``) and ``<name>/CAN/<message>`` (with a DBC), on the same
+source object as that branch's V2G events.
 """
 
 from __future__ import annotations
@@ -16,35 +12,44 @@ from __future__ import annotations
 import zelos_sdk
 from zelos_can import CanDecoder
 
-from .socketcan import CanFrame
+from .pcap import link_frame
+from .socketcan import CanFrame, parse_socketcan
+
+
+def socketcan_frame(pkt) -> CanFrame | None:
+    """The SocketCAN frame in ``pkt``, or None.
+
+    scapy has no dissector for ``LINKTYPE_CAN_SOCKETCAN`` (227) and hands those
+    records back as raw bytes, so anything with no Ethernet/SLL link frame is a
+    SocketCAN candidate.
+    """
+    from scapy.packet import Raw
+
+    if link_frame(pkt) is not None:
+        return None
+    raw = bytes(pkt[Raw].load) if pkt.haslayer(Raw) else bytes(pkt)
+    return parse_socketcan(float(pkt.time), raw)
 
 
 class CanIngest:
-    """A ``zelos-can`` ``CanDecoder`` bound to ``namespace``.
+    """A ``zelos-can`` ``CanDecoder`` writing into ``source`` under ``<name>/CAN``."""
 
-    Emits raw ``can_raw/*`` frame rows always; when ``dbc`` is supplied, also
-    emits decoded ``can_codec/<message>`` signal rows.
-    """
-
-    def __init__(self, namespace: zelos_sdk.TraceNamespace, dbc: str | None = None) -> None:
-        # Bind the decoder's trace sources to THIS namespace. Passing only
-        # ``source_name`` would bind the process-default namespace, and a
-        # namespaced ``TraceWriter`` would then capture nothing (empty trace).
+    def __init__(self, source: zelos_sdk.TraceSource, name: str, dbc: str | None = None) -> None:
         kwargs: dict = {
-            # Source names match the CAN extension's default (decoded "can_codec",
-            # raw "can_raw"). A capture is treated as a single CAN bus; per-bus
-            # naming for multi-interface captures is a future enhancement.
-            "source": zelos_sdk.TraceSource("can_codec", namespace=namespace),
-            "raw_source": zelos_sdk.TraceSource("can_raw", namespace=namespace),
-            # Keep raw frames even when a DBC is decoding signals (with a DBC the
-            # decoder would otherwise default this off).
+            # The branch's own source object: a second same-named source would
+            # register separately and the query layer keeps only the newest.
+            "source": source,
+            "raw_source": source,
+            "event_prefix": f"{name}/CAN",
+            "raw_event_name": f"{name}/CAN/Frame",
+            # Keep raw frames even when a DBC is decoding signals.
             "log_raw_frames": True,
             "timestamp_mode": "absolute",
         }
         if dbc is not None:
             kwargs["database_file"] = str(dbc)
             kwargs["emit_schemas_on_init"] = True
-        # No DBC -> raw-frame-only decoder (zelos-can >= 0.0.7a0 optional DBC).
+        # No DBC -> raw-frame-only decoder.
         self._decoder = CanDecoder(**kwargs)
         self.dbc = str(dbc) if dbc else None
 
