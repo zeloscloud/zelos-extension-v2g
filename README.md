@@ -138,6 +138,9 @@ The signals appear live in the Zelos app exactly as on the bench. Notes:
 | `advanced.replay_pcap` | Replay a capture instead of the interface list; branch = file stem. |
 | `advanced.log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR`. |
 
+Live packet rows cover what the V2G capture filter passes (IPv6 + HomePlug AV). For a full
+wire view, run the Packet extension on the same interface.
+
 ## Trace layout
 
 One branch per interface (live) or per file (replay, convert), `<name>` below:
