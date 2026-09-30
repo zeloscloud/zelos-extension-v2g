@@ -211,6 +211,22 @@ def test_combined_capture_queries_both_families(tmp_path: Path) -> None:
     can_events = {p for p in _event_types(raw) if "/CAN" in p}
     assert can_events == {"*/V2G/combined_can_v2g/CAN/Frame"}
 
+    # Replay takes the same CAN path as convert.
+    from zelos_extension_v2g.live import replay_into
+
+    replay_ns = zelos_sdk.TraceNamespace("replay")
+    codec = make_codec(
+        "V2G",
+        Branch("r"),
+        PacketOptions(log_packets=False),
+        namespace=replay_ns,
+        can=True,
+        dbc=str(EXAMPLE_DBC),
+    )
+    replay_into(codec, COMBINED_FIXTURE, realtime=False)
+    m = codec.can.metrics()
+    assert (m.messages_received, m.messages_decoded, codec.stats.messages) == (4, 3, 274)
+
     # V2G decodes
     assert vals["combined_can_v2g/cable_check_req.soc"], "no V2G SoC values queried back"
     # CAN raw frames present (including the DBC-unknown 0x7FF)

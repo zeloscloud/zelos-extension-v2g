@@ -42,6 +42,9 @@ def run_app_mode() -> None:
         branches = (
             [Branch(branch_name(Path(replay).stem))] if replay else parse_interfaces(config, prefix)
         )
+        dbc = advanced.get("dbc_file") or None
+        if replay and dbc and not Path(dbc).expanduser().is_file():
+            raise ConfigError(f"CAN database not found: {dbc}")
     except ConfigError as e:
         logger.error("V2G configuration is invalid: %s", e)
         sys.exit(1)
@@ -55,8 +58,17 @@ def run_app_mode() -> None:
     options = packet_options(advanced)
     promisc = bool(advanced.get("promiscuous", True))
     v2g_actions.PROMISCUOUS = promisc
+    # A replayed file decodes its SocketCAN frames like convert does; live sniffs do not.
     codecs = {
-        b.interface or b.name: make_codec(prefix, b, options, source=shared) for b in branches
+        b.interface or b.name: make_codec(
+            prefix,
+            b,
+            options,
+            source=shared,
+            can=bool(replay),
+            dbc=dbc and str(Path(dbc).expanduser()),
+        )
+        for b in branches
     }
     zelos_sdk.init(name=ACTION_PREFIX, actions=True)
     logging.getLogger().addHandler(TraceLoggingHandler(global_source))

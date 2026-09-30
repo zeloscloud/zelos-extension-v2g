@@ -12,7 +12,23 @@ from __future__ import annotations
 import zelos_sdk
 from zelos_can import CanDecoder
 
-from .socketcan import CanFrame
+from .pcap import link_frame
+from .socketcan import CanFrame, parse_socketcan
+
+
+def socketcan_frame(pkt) -> CanFrame | None:
+    """The SocketCAN frame in ``pkt``, or None.
+
+    scapy has no dissector for ``LINKTYPE_CAN_SOCKETCAN`` (227) and hands those
+    records back as raw bytes, so anything with no Ethernet/SLL link frame is a
+    SocketCAN candidate.
+    """
+    from scapy.packet import Raw
+
+    if link_frame(pkt) is not None:
+        return None
+    raw = bytes(pkt[Raw].load) if pkt.haslayer(Raw) else bytes(pkt)
+    return parse_socketcan(float(pkt.time), raw)
 
 
 class CanIngest:

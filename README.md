@@ -136,6 +136,7 @@ The signals appear live in the Zelos app exactly as on the bench. Notes:
 | `advanced.log_frames` | Keep frame bytes in the packet rows (default on). |
 | `advanced.stored_frame_bytes` | Cap on stored frame bytes (default null: every byte). |
 | `advanced.replay_pcap` | Replay a capture instead of the interface list; branch = file stem. |
+| `advanced.dbc_file` | CAN database for SocketCAN frames in the replay file (empty: raw frames only). |
 | `advanced.log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR`. |
 
 Live packet rows cover what the V2G capture filter passes (IPv6 + HomePlug AV). For a full
@@ -152,8 +153,8 @@ One branch per interface (live) or per file (replay, convert), `<name>` below:
 | `<prefix>/<name>/message` | V2GTP message timeline, raw EXI per row. |
 | `<prefix>/<name>/<message>` | Decoded fields, e.g. `pre_charge_res`, `current_demand_req`. |
 | `<prefix>/<name>/packets` | Every frame as `zelos.packet.v1` (the Packet panel). |
-| `<prefix>/<name>/CAN/Frame` | SocketCAN frames in a converted capture (`zelos.can.frame.v1`). |
-| `<prefix>/<name>/CAN/<id>_<message>` | DBC-decoded CAN signals (with `--dbc`). |
+| `<prefix>/<name>/CAN/Frame` | SocketCAN frames in a converted, replayed or piped capture (`zelos.can.frame.v1`). |
+| `<prefix>/<name>/CAN/<id>_<message>` | DBC-decoded CAN signals (`--dbc` / `advanced.dbc_file`). |
 
 With the prefix cleared, `<name>` is the source and V2G events are unprefixed; the packet
 and CAN events keep their `<name>/` segment (`<name>/<name>/packets`). Logs land at

@@ -20,6 +20,7 @@ import zelos_sdk
 from scapy.config import conf
 
 from . import slac
+from .can_ingest import CanIngest, socketcan_frame
 from .exi import libv2g
 from .pcap import SdpFrame, SlacFrame, V2gMessage
 from .stream import V2gStreamDecoder
@@ -182,8 +183,15 @@ class V2gCodec:
         source: zelos_sdk.TraceSource,
         event_prefix: str | None = None,
         packets: Any = None,
+        can_name: str | None = None,
+        dbc: str | None = None,
     ) -> None:
         self.source = source
+        # Set for file paths (convert, replay, stdin): SocketCAN frames decode into
+        # `<can_name>/CAN/...`, the CanIngest created on the first one.
+        self.can_name = can_name
+        self.dbc = dbc
+        self.can: CanIngest | None = None
         self._prefix = f"{event_prefix}/" if event_prefix else ""
         self.packets = packets  # zelos_packet.PacketDecoder or None
         self.stats = ConversionStats()
@@ -199,7 +207,13 @@ class V2gCodec:
     # ── frame in (live, replay, stdin, convert) ───────────────────────────
 
     def feed(self, pkt) -> None:
-        """One captured frame: its packet row, then V2G decode, both at ``pkt.time``."""
+        """One captured frame: a SocketCAN frame, or its packet row then V2G decode,
+        all stamped ``pkt.time``."""
+        if self.can_name is not None and (frame := socketcan_frame(pkt)) is not None:
+            if self.can is None:
+                self.can = CanIngest(self.source, self.can_name, dbc=self.dbc)
+            self.can.emit(frame)
+            return
         if self.packets is not None:
             dlt = conf.l2types.layer2num.get(type(pkt))
             if dlt is not None:

@@ -15,13 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import zelos_sdk
+from scapy.utils import PcapReader
 
-from .can_ingest import CanIngest
 from .codec import ConversionStats
 from .config import DEFAULT_PREFIX, Branch, PacketOptions, branch_name, check_prefix, make_codec
 from .exi import libv2g
-from .pcap import link_frame
-from .socketcan import parse_socketcan
 
 logger = logging.getLogger(__name__)
 
@@ -76,28 +74,6 @@ class CaptureStats:
         }
 
 
-def _dispatch_capture(input_file: Path, on_v2g_frame, on_can_frame) -> None:
-    """Read a capture once and route each frame: SocketCAN records to
-    ``on_can_frame``, Ethernet / cooked frames to ``on_v2g_frame``.
-
-    scapy reads the pcap/pcapng container but has no dissector for
-    ``LINKTYPE_CAN_SOCKETCAN`` (227), so it hands those records back as raw
-    bytes — anything with no Ethernet/SLL link frame is a SocketCAN candidate.
-    """
-    from scapy.packet import Raw
-    from scapy.utils import PcapReader
-
-    with PcapReader(str(input_file)) as reader:
-        for pkt in reader:
-            if link_frame(pkt) is None:
-                raw = bytes(pkt[Raw].load) if pkt.haslayer(Raw) else bytes(pkt)
-                frame = parse_socketcan(float(pkt.time), raw)
-                if frame is not None:
-                    on_can_frame(frame)
-                continue
-            on_v2g_frame(pkt)
-
-
 def convert_capture(
     input_file: Path,
     output_file: Path,
@@ -144,26 +120,18 @@ def convert_capture(
         if span["last"] is None or ts > span["last"]:
             span["last"] = ts
 
-    # The CAN decoder is created lazily on the first SocketCAN frame, so a
-    # pure-V2G capture produces no empty can* tables.
-    can: dict[str, CanIngest | None] = {"ingest": None}
-
-    def on_can(f) -> None:
-        track(f.ts)
-        if can["ingest"] is None:
-            can["ingest"] = CanIngest(v2g.source, branch.name, dbc=str(dbc) if dbc else None)
-        can["ingest"].emit(f)
-
-    def on_v2g(pkt) -> None:
-        track(float(pkt.time))
-        v2g.feed(pkt)
-
     # Exiting the context force-flushes buffered events; packet rows are pushed
     # explicitly first (`decode_frame` buffers on its own side).
     with zelos_sdk.TraceWriter(str(output_file), namespace=ns):
         branch = Branch(branch_name(input_file.stem))
-        v2g = make_codec(prefix, branch, PacketOptions(log_packets=log_packets), namespace=ns)
-        _dispatch_capture(input_file, on_v2g, on_can)
+        options = PacketOptions(log_packets=log_packets)
+        v2g = make_codec(prefix, branch, options, namespace=ns, can=True, dbc=dbc and str(dbc))
+        # SocketCAN frames nest at <stem>/CAN, created on the first one, so a pure-V2G
+        # capture gets no CAN tables.
+        with PcapReader(str(input_file)) as reader:
+            for pkt in reader:
+                track(float(pkt.time))
+                v2g.feed(pkt)
         v2g.flush()
 
     duration = None
@@ -174,12 +142,11 @@ def convert_capture(
     stats = CaptureStats(v2g=v2g.stats, dbc=str(dbc) if dbc else None, duration_seconds=duration)
     if v2g.packets is not None:
         stats.packets = v2g.packets.metrics().packets_emitted
-    if can["ingest"] is not None:
-        m = can["ingest"].metrics()
+    if v2g.can is not None:
+        m = v2g.can.metrics()
         stats.can_frames = m.messages_received
         stats.can_decoded_frames = m.messages_decoded
         stats.can_unknown_ids = m.unknown_messages
-        stats.dbc = can["ingest"].dbc
 
     logger.info("Conversion complete: %s", stats.to_dict())
     return stats
