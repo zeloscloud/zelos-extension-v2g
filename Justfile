@@ -34,9 +34,10 @@ test:
 dev:
     uv run python main.py
 
-# Package for Zelos marketplace
-package:
-    zelos extensions package .
+# Package for Zelos marketplace (also generates actions.json)
+package: clean
+    # No stray __pycache__ in the archive from the action dump's import.
+    PYTHONDONTWRITEBYTECODE=1 zelos extensions package .
 
 # Run all CI checks
 ci:
@@ -78,5 +79,5 @@ delete-release VERSION:
 
 # Clean build artifacts
 clean:
-    rm -rf dist build .pytest_cache .ruff_cache *.tar.gz .artifacts
+    rm -rf dist build .pytest_cache .ruff_cache *.tar.gz .artifacts actions.json
     find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

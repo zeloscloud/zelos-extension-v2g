@@ -6,6 +6,12 @@ repository = "https://github.com/zeloscloud/zelos-extension-v2g"
 icon = "assets/icon.svg"
 readme = "README.md"
 
+# Compatibility floor: 26.0.8 is the first release whose config form drops a
+# `ui:widget` it does not register instead of crashing. This config names
+# `action-choices`, so older apps must not install it.
+[zelos]
+version = ">=26.0.8"
+
 [config]
 schema = "config.schema.json"
 
@@ -16,5 +22,7 @@ type = "agent"
 entry = "main.py"
 python_version = "3.11"
 
+# Package boundary. extension.toml, README.md, config.schema.json, the icon,
+# pyproject.toml, uv.lock and the generated actions.json are added automatically.
 [package]
 paths = ["main.py", "zelos_extension_v2g"]

@@ -17,10 +17,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import zelos_sdk
+from scapy.config import conf
 
 from . import slac
 from .exi import libv2g
-from .pcap import DecodedSession, SdpFrame, SlacFrame, V2gMessage
+from .pcap import SdpFrame, SlacFrame, V2gMessage
+from .stream import V2gStreamDecoder
 
 logger = logging.getLogger(__name__)
 
@@ -160,20 +162,58 @@ def _ts_ns(ts: float) -> int:
     return int(ts * 1e9)
 
 
+def trace_layout(prefix: str, name: str) -> tuple[str, str | None]:
+    """The one trace-naming rule: ``(source name, event prefix or None)``.
+
+    With a prefix, one source carries every branch and each branch's events nest
+    under ``<name>/``. Cleared, the branch owns a source named ``<name>`` and its
+    events are unprefixed.
+    """
+    return (prefix, name) if prefix else (name, None)
+
+
 class V2gCodec:
-    """Registers V2G trace-event schemas and emits rows from a DecodedSession."""
+    """One capture branch: decodes frames and emits its V2G events (and, when
+    ``packets`` is set, a raw ``zelos.packet.v1`` row per frame) into ``source``.
+    """
 
     def __init__(
         self,
-        namespace: zelos_sdk.TraceNamespace | None = None,
-        source_name: str = "v2g",
+        source: zelos_sdk.TraceSource,
+        event_prefix: str | None = None,
+        packets: Any = None,
     ) -> None:
-        if namespace is not None:
-            self.source = zelos_sdk.TraceSource(source_name, namespace=namespace)
-        else:
-            self.source = zelos_sdk.TraceSource(source_name)
+        self.source = source
+        self._prefix = f"{event_prefix}/" if event_prefix else ""
+        self.packets = packets  # zelos_packet.PacketDecoder or None
+        self.stats = ConversionStats()
         self._decoded_events: dict[str, Any] = {}
         self._define_layer1_schema()
+        self._stream = V2gStreamDecoder(
+            on_slac=self.emit_slac, on_sdp=self.emit_sdp, on_message=self.emit_message
+        )
+
+    def _event(self, name: str) -> str:
+        return self._prefix + name
+
+    # ── frame in (live, replay, stdin, convert) ───────────────────────────
+
+    def feed(self, pkt) -> None:
+        """One captured frame: its packet row, then V2G decode, both at ``pkt.time``."""
+        if self.packets is not None:
+            dlt = conf.l2types.layer2num.get(type(pkt))
+            if dlt is not None:
+                self.packets.decode_frame(
+                    pkt.original or bytes(pkt),
+                    link_type=dlt,
+                    timestamp_ns=_ts_ns(float(pkt.time)),
+                )
+        self._stream.feed_packet(pkt)
+
+    def flush(self) -> None:
+        """Push buffered packet rows through; ``decode_frame`` has no timer of its own."""
+        if self.packets is not None:
+            self.packets.flush()
 
     # ── Layer 1: framing ──────────────────────────────────────────────────
 
@@ -181,7 +221,7 @@ class V2gCodec:
         F = zelos_sdk.TraceEventFieldMetadata
         DT = zelos_sdk.DataType
         self.slac_event = self.source.add_event(
-            "slac",
+            self._event("slac"),
             [
                 F("mmtype", DT.UInt16),
                 F("name", DT.String),
@@ -191,7 +231,7 @@ class V2gCodec:
             ],
         )
         self.sdp_event = self.source.add_event(
-            "sdp",
+            self._event("sdp"),
             [
                 F("kind", DT.String),
                 F("secc_ip", DT.String),
@@ -201,7 +241,7 @@ class V2gCodec:
             ],
         )
         self.message_event = self.source.add_event(
-            "message",
+            self._event("message"),
             [
                 F("index", DT.UInt32),
                 F("direction", DT.String),
@@ -213,7 +253,7 @@ class V2gCodec:
         )
         # Decoded fields carried by individual SLAC frames (strictly per-frame).
         self.slac_attenuation_event = self.source.add_event(
-            "slac_attenuation",  # one row per CM_ATTEN_CHAR.IND
+            self._event("slac_attenuation"),  # one row per CM_ATTEN_CHAR.IND
             [
                 F("run_id", DT.String),
                 F("num_sounds", DT.UInt8),
@@ -224,7 +264,7 @@ class V2gCodec:
             ],
         )
         self.slac_match_event = self.source.add_event(
-            "slac_match",  # one row per CM_SLAC_MATCH.CNF
+            self._event("slac_match"),  # one row per CM_SLAC_MATCH.CNF
             [
                 F("run_id", DT.String),
                 F("nid", DT.String),
@@ -244,10 +284,11 @@ class V2gCodec:
         metas = [F(f, *_FIELD_META[f]) for f in fields if f in _FIELD_META]
         if not metas:
             return None
-        event = self.source.add_event(_snake(msg), metas)
+        name = self._event(_snake(msg))
+        event = self.source.add_event(name, metas)
         for f in fields:
             if f in _VALUE_TABLES:
-                self.source.add_value_table(_snake(msg), f, _VALUE_TABLES[f])
+                self.source.add_value_table(name, f, _VALUE_TABLES[f])
         self._decoded_events[msg] = event
         return event
 
@@ -272,6 +313,7 @@ class V2gCodec:
     # ── per-record emit (shared by batch convert + live capture) ──────────
 
     def emit_slac(self, f: SlacFrame) -> None:
+        self.stats.slac_frames += 1
         self.slac_event.log_at(
             _ts_ns(f.ts),
             mmtype=f.mmtype,
@@ -302,6 +344,7 @@ class V2gCodec:
                 )
 
     def emit_sdp(self, f: SdpFrame) -> None:
+        self.stats.sdp_frames += 1
         self.sdp_event.log_at(
             _ts_ns(f.ts),
             kind=f.kind,
@@ -338,32 +381,8 @@ class V2gCodec:
             exi=m.exi,
         )
         emitted = bool(decoded and self._emit_decoded(decoded, ts_ns))
+        self.stats.messages += 1
+        self.stats.decoded_messages += emitted
+        if dialect and self.stats.protocol is None:
+            self.stats.protocol = dialect
         return decoded, dialect, emitted
-
-    # ── batch driver ──────────────────────────────────────────────────────
-
-    def process(self, session: DecodedSession) -> ConversionStats:
-        stats = ConversionStats()
-        if session.start_ts is not None and session.end_ts is not None:
-            stats.duration_seconds = session.end_ts - session.start_ts
-
-        for f in session.slac:
-            self.emit_slac(f)
-            stats.slac_frames += 1
-
-        for f in session.sdp:
-            self.emit_sdp(f)
-            stats.sdp_frames += 1
-
-        if not libv2g.available():
-            logger.warning("No libcbv2g shim for this platform; emitting Layer-1 framing only")
-        for m in session.messages:
-            stats.messages += 1
-            _decoded, dialect, emitted = self.emit_message(m)
-            if emitted:
-                stats.decoded_messages += 1
-            if dialect and stats.protocol is None:
-                stats.protocol = dialect
-
-        logger.info("Emitted V2G trace: %s", stats.to_dict())
-        return stats

@@ -16,7 +16,7 @@ import pytest
 import zelos_sdk
 
 from zelos_extension_v2g.can_ingest import CanIngest
-from zelos_extension_v2g.codec import V2gCodec
+from zelos_extension_v2g.config import Branch, PacketOptions, make_codec
 from zelos_extension_v2g.converter import convert_capture
 from zelos_extension_v2g.pcap import SlacFrame
 from zelos_extension_v2g.socketcan import parse_socketcan
@@ -72,6 +72,15 @@ def _field_paths(trz: Path) -> set[str]:
         reader.close()
 
 
+def _event_types(trz: Path) -> dict[str, str | None]:
+    reader = zelos_sdk.TraceReader(str(trz))
+    reader.open()
+    try:
+        return {ev.path: ev.event_type for src in reader.list_fields() for ev in src.events}
+    finally:
+        reader.close()
+
+
 def _sources(paths: set[str]) -> set[str]:
     """The source segment of each field path (``*/<source>/<event>.<field>``)."""
     return {p.split("/")[1] for p in paths if "/" in p}
@@ -97,7 +106,7 @@ def test_convert_can_only_raw_frames(can_pcap: Path, tmp_path: Path) -> None:
     assert stats.can_frames == 4
     assert stats.can_decoded_frames == 0  # no DBC => raw frames only
     assert stats.v2g.messages == 0
-    assert any(s.startswith("can") for s in _sources(_field_paths(tmp_path / "can.trz")))
+    assert _event_types(tmp_path / "can.trz")["*/V2G/canbus/CAN/Frame"] == "zelos.can.frame.v1"
 
 
 def test_convert_can_with_dbc(can_pcap: Path, tmp_path: Path) -> None:
@@ -107,16 +116,16 @@ def test_convert_can_with_dbc(can_pcap: Path, tmp_path: Path) -> None:
     stats = convert_capture(can_pcap, out, dbc=dbc)
     assert stats.can_frames == 4
     assert stats.can_decoded_frames == 2  # the two 0x140 frames match Msg320
-    assert any(p.endswith(".Speed") for p in _field_paths(out)), "decoded Speed signal missing"
+    assert any(
+        p.startswith("*/V2G/canbus/CAN/") and p.endswith(".Speed") for p in _field_paths(out)
+    )
 
 
 def test_v2g_only_has_no_can_tables(tmp_path: Path) -> None:
     out = tmp_path / "v2g.trz"
     stats = convert_capture(V2G_FIXTURE, out)
     assert stats.can_frames == 0
-    sources = _sources(_field_paths(out))
-    assert "v2g" in sources
-    assert not any(s.startswith("can") for s in sources), "no can* tables for a V2G-only capture"
+    assert not any("/CAN/" in p for p in _field_paths(out)), "no CAN tables for a V2G-only capture"
 
 
 def test_combined_shares_one_writer(tmp_path: Path) -> None:
@@ -125,16 +134,17 @@ def test_combined_shares_one_writer(tmp_path: Path) -> None:
     out = tmp_path / "combined.trz"
     ns = zelos_sdk.TraceNamespace("converter")
     with zelos_sdk.TraceWriter(str(out), namespace=ns):
-        v2g = V2gCodec(namespace=ns)
-        can = CanIngest(ns)
+        v2g = make_codec("V2G", Branch("x"), PacketOptions(log_packets=False), namespace=ns)
+        can = CanIngest(v2g.source, "x")
         v2g.emit_slac(
             SlacFrame(ts=1.0, mmtype=0x6064, name="CM_SLAC_PARM.REQ", src_mac="a", dst_mac="b")
         )
         can.emit(parse_socketcan(1.0, _socketcan_record(0x140, False, 2, b"\x64\x00")))
 
-    sources = _sources(_field_paths(out))
-    assert "v2g" in sources
-    assert any(s.startswith("can") for s in sources)
+    paths = _field_paths(out)
+    assert _sources(paths) == {"V2G"}
+    assert any(p.startswith("*/V2G/x/slac.") for p in paths)
+    assert any(p.startswith("*/V2G/x/CAN/Frame.") for p in paths)
 
 
 # ─── combined CAN+V2G end-to-end (committed 2-interface fixture, query both) ───
@@ -184,23 +194,37 @@ def test_combined_capture_queries_both_families(tmp_path: Path) -> None:
     vals = _query_values(
         out,
         [
-            "v2g/cable_check_req.soc",
-            "can_raw/can_raw.arbitration_id",
-            "can_codec/0100_BMS_Status.PackVoltage",
-            "can_codec/0100_BMS_Status.PackCurrent",
-            "can_codec/0100_BMS_Status.SoC",
-            "can_codec/0100_BMS_Status.ChargeState",
-            "can_codec/0200_VCU_ChargeCommand.TargetVoltage",
+            "combined_can_v2g/cable_check_req.soc",
+            "combined_can_v2g/CAN/Frame.arbitration_id",
+            "combined_can_v2g/CAN/0100_BMS_Status.PackVoltage",
+            "combined_can_v2g/CAN/0100_BMS_Status.PackCurrent",
+            "combined_can_v2g/CAN/0100_BMS_Status.SoC",
+            "combined_can_v2g/CAN/0100_BMS_Status.ChargeState",
+            "combined_can_v2g/CAN/0200_VCU_ChargeCommand.TargetVoltage",
         ],
     )
+    # Everything sits on the one V2G source, CAN beside the V2G events.
+    assert _sources(_field_paths(out)) == {"V2G"}
+    # Without the DBC: the same raw frames, no decoded messages.
+    raw = tmp_path / "combined_raw.trz"
+    assert convert_capture(COMBINED_FIXTURE, raw).can_frames == 4
+    can_events = {p for p in _event_types(raw) if "/CAN" in p}
+    assert can_events == {"*/V2G/combined_can_v2g/CAN/Frame"}
+
     # V2G decodes
-    assert vals["v2g/cable_check_req.soc"], "no V2G SoC values queried back"
+    assert vals["combined_can_v2g/cable_check_req.soc"], "no V2G SoC values queried back"
     # CAN raw frames present (including the DBC-unknown 0x7FF)
-    ids = set(vals["can_raw/can_raw.arbitration_id"])
+    ids = set(vals["combined_can_v2g/CAN/Frame.arbitration_id"])
     assert {0x100, 0x200, 0x7FF} <= ids, f"missing raw CAN ids: {sorted(ids)}"
     # CAN-DBC decode: scaling (0.1 / 0.5), signed current, and the enum field
-    assert 400.0 in [round(v, 1) for v in vals["can_codec/0100_BMS_Status.PackVoltage"]]
-    assert -50.0 in [round(v, 1) for v in vals["can_codec/0100_BMS_Status.PackCurrent"]]  # signed
-    assert 55.0 in [round(v, 1) for v in vals["can_codec/0100_BMS_Status.SoC"]]
-    assert 2 in vals["can_codec/0100_BMS_Status.ChargeState"]  # 2 == "Charging" in example.dbc
-    assert 420.0 in [round(v, 1) for v in vals["can_codec/0200_VCU_ChargeCommand.TargetVoltage"]]
+    assert 400.0 in [round(v, 1) for v in vals["combined_can_v2g/CAN/0100_BMS_Status.PackVoltage"]]
+    assert -50.0 in [
+        round(v, 1) for v in vals["combined_can_v2g/CAN/0100_BMS_Status.PackCurrent"]
+    ]  # signed
+    assert 55.0 in [round(v, 1) for v in vals["combined_can_v2g/CAN/0100_BMS_Status.SoC"]]
+    assert (
+        2 in vals["combined_can_v2g/CAN/0100_BMS_Status.ChargeState"]
+    )  # 2 == "Charging" in example.dbc
+    assert 420.0 in [
+        round(v, 1) for v in vals["combined_can_v2g/CAN/0200_VCU_ChargeCommand.TargetVoltage"]
+    ]

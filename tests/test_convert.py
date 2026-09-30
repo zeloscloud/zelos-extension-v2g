@@ -10,13 +10,24 @@ from pathlib import Path
 import pytest
 
 from zelos_extension_v2g import slac
-from zelos_extension_v2g.converter import convert_v2g_pcap, resolve_trz_output
+from zelos_extension_v2g.config import Branch, PacketOptions, make_codec
+from zelos_extension_v2g.converter import convert_capture, resolve_trz_output
 from zelos_extension_v2g.exi import libv2g
 from zelos_extension_v2g.pcap import decode_session
 
 FILES = Path(__file__).parent / "files"
 FIXTURE = FILES / "2024-04-20_ModelY_pyPLC_stop_in_precharge.pcapng"
 SLAC_FAIL = FILES / "2023-05-03_TaycanLeftside_slacFail.pcapng"
+
+
+def _codec(name: str = "t"):
+    """A V2G-only codec in a throwaway namespace (no writer): counts via ``stats``."""
+    import zelos_sdk
+
+    ns = zelos_sdk.TraceNamespace("test")
+    codec = make_codec("V2G", Branch(name), PacketOptions(log_packets=False), namespace=ns)
+    codec.namespace = ns  # the source does not keep its namespace alive
+    return codec
 
 
 def test_decode_session_structure() -> None:
@@ -45,7 +56,7 @@ def test_decode_session_structure() -> None:
 
 def test_convert_produces_trz(tmp_path: Path) -> None:
     out = tmp_path / "session.trz"
-    stats = convert_v2g_pcap(FIXTURE, out)
+    stats = convert_capture(FIXTURE, out).v2g
 
     assert out.exists()
     assert out.stat().st_size > 0
@@ -59,7 +70,7 @@ def test_convert_rejects_unknown_extension(tmp_path: Path) -> None:
     bogus = tmp_path / "capture.txt"
     bogus.write_text("not a pcap")
     try:
-        convert_v2g_pcap(bogus, tmp_path / "out.trz")
+        convert_capture(bogus, tmp_path / "out.trz")
     except ValueError as e:
         assert "Unsupported format" in str(e)
     else:  # pragma: no cover
@@ -141,7 +152,7 @@ def test_slac_failure_capture() -> None:
 
 @pytest.mark.skipif(not libv2g.available(), reason="no libcbv2g shim for this platform")
 def test_convert_decodes_telemetry(tmp_path: Path) -> None:
-    stats = convert_v2g_pcap(FIXTURE, tmp_path / "out.trz")
+    stats = convert_capture(FIXTURE, tmp_path / "out.trz").v2g
     assert stats.protocol == "DIN 70121"  # factual — the grammar that decoded
     assert stats.decoded_messages >= 260  # nearly every message field-decodes
 
@@ -192,7 +203,7 @@ def test_trace_fields_present_via_reader(tmp_path: Path) -> None:
     import zelos_sdk
 
     out = tmp_path / "roundtrip.trz"
-    convert_v2g_pcap(FIXTURE, out)
+    convert_capture(FIXTURE, out)
 
     reader = zelos_sdk.TraceReader(str(out))
     reader.open()
@@ -202,17 +213,20 @@ def test_trace_fields_present_via_reader(tmp_path: Path) -> None:
         reader.close()
 
     expected = {
-        "*/v2g/slac.data",  # raw SLAC frame bytes, as-is
-        "*/v2g/slac_attenuation.atten_mean",  # per-frame attenuation decode
-        "*/v2g/slac_match.nid",  # per-frame matched network id
-        "*/v2g/sdp.secc_ip",
-        "*/v2g/supported_app_protocol_req.protocol",
-        "*/v2g/session_setup_req.evccid",
-        "*/v2g/session_setup_res.evse_id",
-        "*/v2g/charge_parameter_discovery_req.ev_max_voltage",
-        "*/v2g/charge_parameter_discovery_res.evse_max_voltage",
-        "*/v2g/cable_check_req.soc",
-        "*/v2g/pre_charge_res.evse_present_voltage",
+        f"*/V2G/{FIXTURE.stem}/{f}"
+        for f in (
+            "slac.data",  # raw SLAC frame bytes, as-is
+            "slac_attenuation.atten_mean",  # per-frame attenuation decode
+            "slac_match.nid",  # per-frame matched network id
+            "sdp.secc_ip",
+            "supported_app_protocol_req.protocol",
+            "session_setup_req.evccid",
+            "session_setup_res.evse_id",
+            "charge_parameter_discovery_req.ev_max_voltage",
+            "charge_parameter_discovery_res.evse_max_voltage",
+            "cable_check_req.soc",
+            "pre_charge_res.evse_present_voltage",
+        )
     }
     missing = expected - paths
     assert not missing, f"missing decoded fields in trace: {sorted(missing)}"
@@ -248,7 +262,7 @@ def test_layer1_without_libv2g(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     (SLAC / SDP / V2GTP message timeline) still converts — graceful degradation."""
     monkeypatch.setattr(libv2g, "available", lambda: False)
 
-    stats = convert_v2g_pcap(FIXTURE, tmp_path / "layer1.trz")
+    stats = convert_capture(FIXTURE, tmp_path / "layer1.trz").v2g
 
     assert stats.messages == 274  # framing still works
     assert stats.sdp_frames == 2
@@ -279,68 +293,59 @@ def test_resolve_trz_output_forces_trz_suffix(tmp_path: Path) -> None:
     assert resolved.name == "out.trz"
 
 
-class _CountingCodec:
-    """Stand-in for V2gCodec that counts the per-record emits the live path makes."""
-
-    def __init__(self) -> None:
-        self.slac = self.sdp = self.messages = 0
-
-    def emit_slac(self, f) -> None:
-        self.slac += 1
-
-    def emit_sdp(self, f) -> None:
-        self.sdp += 1
-
-    def emit_message(self, m) -> None:
-        self.messages += 1
-
-
 def test_live_emits_same_records_as_batch() -> None:
     """Replaying the fixture through the live path emits exactly the records the batch
-    converter produces — every frame, no synthesized summary, no extra rows."""
-    from zelos_extension_v2g.live import sniff_into
+    decoder produces — every frame, no synthesized summary, no extra rows."""
+    from zelos_extension_v2g.live import replay_into
 
-    codec = _CountingCodec()
-    sniff_into(codec, replay=str(FIXTURE), realtime=False)
+    codec = _codec()
+    replay_into(codec, FIXTURE, realtime=False)
 
     batch = decode_session(FIXTURE)
-    assert codec.slac == len(batch.slac)
-    assert codec.sdp == len(batch.sdp)
-    assert codec.messages == len(batch.messages)
+    assert codec.stats.slac_frames == len(batch.slac)
+    assert codec.stats.sdp_frames == len(batch.sdp)
+    assert codec.stats.messages == len(batch.messages)
 
 
-def test_replay_paces_by_capture_deltas(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_replay_paces_by_capture_deltas() -> None:
     """Real-time replay releases frames spaced by the capture's actual inter-frame
-    deltas (not a fast burst). The scheduled sleeps are captured without real waiting."""
+    deltas (not a fast burst). The scheduled waits are captured without real waiting."""
     import time as _time
 
     from scapy.utils import PcapReader
 
-    from zelos_extension_v2g.live import sniff_into
+    from zelos_extension_v2g.live import replay_into
 
     with PcapReader(str(SLAC_FAIL)) as reader:
-        times = [float(p.time) for p in reader]
-    span = times[-1] - times[0]
+        src = [float(p.time) for p in reader]
+    span = src[-1] - src[0]
     assert span > 1.0  # the SLAC retries play out over seconds — a real schedule, not 0
 
-    class _StampingCodec(_CountingCodec):
-        def __init__(self) -> None:
-            super().__init__()
-            self.stamps: list[float] = []
+    class _Stop:
+        delays: list[float] = []
 
-        def emit_slac(self, f) -> None:
-            self.stamps.append(f.ts)
+        def wait(self, d: float) -> bool:
+            self.delays.append(d)
+            return False
 
-    delays: list[float] = []
-    monkeypatch.setattr(_time, "sleep", lambda d: delays.append(d))
-    codec = _StampingCodec()
-    sniff_into(codec, replay=str(SLAC_FAIL), realtime=True)
+    class _Stamps:
+        stamps: list[float] = []
+
+        def feed(self, pkt) -> None:
+            self.stamps.append(float(pkt.time))
+
+        def flush(self) -> None: ...
+
+        class stats:
+            messages = 0
+
+    stop, codec = _Stop(), _Stamps()
+    replay_into(codec, SLAC_FAIL, realtime=True, stop=stop)
 
     # Frames were paced out to ~the capture span (a fast burst would schedule ~nothing).
-    assert delays, "expected real-time pacing to schedule sleeps"
-    assert max(delays) == pytest.approx(span, abs=2.0)
+    assert stop.delays, "expected real-time pacing to schedule waits"
+    assert max(stop.delays) == pytest.approx(span, abs=2.0)
     # One constant shift: stamps land near now with the capture's exact spacing.
-    src = [f.ts for f in decode_session(SLAC_FAIL).slac]
     assert codec.stamps[0] == pytest.approx(_time.time(), abs=5.0)
     assert [s - codec.stamps[0] for s in codec.stamps] == pytest.approx(
         [t - src[0] for t in src], abs=1e-6
@@ -354,13 +359,13 @@ def test_decode_stream_matches_batch() -> None:
 
     from zelos_extension_v2g.live import decode_stream_into
 
-    codec = _CountingCodec()
+    codec = _codec()
     decode_stream_into(codec, source=io.BytesIO(FIXTURE.read_bytes()))
 
     batch = decode_session(FIXTURE)
-    assert codec.slac == len(batch.slac)
-    assert codec.sdp == len(batch.sdp)
-    assert codec.messages == len(batch.messages)
+    assert codec.stats.slac_frames == len(batch.slac)
+    assert codec.stats.sdp_frames == len(batch.sdp)
+    assert codec.stats.messages == len(batch.messages)
 
 
 def test_cooked_sll_link_layer_decodes_slac() -> None:
