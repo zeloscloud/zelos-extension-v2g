@@ -149,7 +149,7 @@ def run_live(
     options = PacketOptions()
     if replay:
         branch = Branch(branch_name(Path(replay).stem))
-        replay_into(make_codec(prefix, branch, options, source=shared), replay)
+        replay_into(make_codec(prefix, branch, options, source=shared, can=True), replay)
         return
     ifaces = [s.strip() for s in (iface or "").split(",") if s.strip()]
     codecs = {
@@ -166,10 +166,11 @@ def run_live(
             codec.flush()
 
 
-def run_decode(prefix: str = DEFAULT_PREFIX, name: str = "stdin") -> None:
-    """Standalone (CLI) stdin decoder."""
+def run_decode(prefix: str = DEFAULT_PREFIX, name: str = "stdin", dbc: str | None = None) -> None:
+    """Standalone (CLI) stdin decoder; SocketCAN frames decode like convert."""
     shared = _init_standalone(prefix)
-    codec = make_codec(prefix, Branch(branch_name(name)), PacketOptions(), source=shared)
+    branch = Branch(branch_name(name))
+    codec = make_codec(prefix, branch, PacketOptions(), source=shared, can=True, dbc=dbc)
     stop = threading.Event()
     threading.Thread(target=flush_every, args=([codec], stop), daemon=True).start()
     try:

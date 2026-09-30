@@ -80,7 +80,8 @@ pushes a stats row stamped wall-clock now, stretching the trace's time range to 
 `zelos_can.CanDecoder`; anything else → the file's `V2gCodec`. The CAN decoder writes into that
 codec's source, under `<name>/CAN/Frame` (raw, `zelos.can.frame.v1`) and `<name>/CAN/<id>_<msg>`
 (with a DBC), so a combined capture is one time-aligned branch. It is created on the first
-SocketCAN frame, so V2G-only captures get no CAN tables. Live/replay paths skip CAN frames.
+SocketCAN frame, so V2G-only captures get no CAN tables. The split lives in `V2gCodec.feed`
+(`make_codec(can=True)`), shared by convert, replay and stdin; live sniffs leave it off.
 Each convert uses a fresh `TraceNamespace`, so repeated action runs leak no schemas.
 
 **CAN decode is not reimplemented here** — raw + DBC frame cracking lives in the `zelos-can`

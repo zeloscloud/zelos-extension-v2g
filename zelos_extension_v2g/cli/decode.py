@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import rich_click as click
 
@@ -17,7 +18,13 @@ from ..config import DEFAULT_PREFIX
     help="Leading trace-source name; pass '' to name the source after --name",
 )
 @click.option("--name", default="stdin", show_default=True, help="Branch name for the stream")
-def decode(prefix: str, name: str) -> None:
+@click.option(
+    "-d",
+    "--dbc",
+    type=click.Path(exists=True, path_type=Path),
+    help="CAN database (.dbc) — decode CAN frames into named signals (raw frames are always kept)",
+)
+def decode(prefix: str, name: str, dbc: Path | None) -> None:
     """Decode a pcap stream piped on **stdin** into the live Zelos app.
 
     The network analog of `candump | cantools decode`: pipe a capture tool's pcap
@@ -37,4 +44,4 @@ def decode(prefix: str, name: str) -> None:
         )
     from ..live import run_decode
 
-    run_decode(prefix=prefix, name=name)
+    run_decode(prefix=prefix, name=name, dbc=str(dbc) if dbc else None)

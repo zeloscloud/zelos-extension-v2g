@@ -91,11 +91,14 @@ def make_codec(
     *,
     source: zelos_sdk.TraceSource | None = None,
     namespace: zelos_sdk.TraceNamespace | None = None,
+    can: bool = False,
+    dbc: str | None = None,
 ) -> V2gCodec:
     """A codec for ``branch`` per :func:`trace_layout`.
 
     Pass ``source`` to share one prefix source across branches: two sources under one
-    name register separately and the query layer keeps only the newest.
+    name register separately and the query layer keeps only the newest. ``can`` decodes
+    SocketCAN frames found in a file (optionally with ``dbc``); live sniffs leave it off.
     """
     source_name, event_prefix = trace_layout(prefix, branch.name)
     if source is None:
@@ -109,4 +112,5 @@ def make_codec(
             log_frames=options.log_frames,
             stored_frame_bytes=options.stored_frame_bytes,
         )
-    return V2gCodec(source, event_prefix, packets=packets)
+    can_name = branch.name if can else None
+    return V2gCodec(source, event_prefix, packets=packets, can_name=can_name, dbc=dbc)
