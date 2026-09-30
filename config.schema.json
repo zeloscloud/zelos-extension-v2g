@@ -57,6 +57,13 @@
           "ui:placeholder": "V2G",
           "ui:emptyValue": ""
         },
+        "promiscuous": {
+          "type": "boolean",
+          "title": "Promiscuous Mode",
+          "description": "Capture every frame on the link, not just frames addressed to this host. V2G sniffing usually observes EV-charger unicast from a third host (a tap, bridge or PLC modem), which only promiscuous mode sees. Turn it off on interfaces or drivers that refuse it (many Wi-Fi adapters do).",
+          "default": true,
+          "ui:widget": "toggle"
+        },
         "log_packets": {
           "type": "boolean",
           "title": "Log Packets",

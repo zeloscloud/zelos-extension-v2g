@@ -103,7 +103,8 @@ Standalone (no agent config): `uv run python main.py live --iface eth0` or `--re
 > Live capture needs raw-socket rights on the agent's machine. The
 > `V2G/check_permissions` action opens a capture and, if refused, returns the fix
 > (macOS: `/dev/bpf` access via ChmodBPF; Linux: `setcap cap_net_raw,cap_net_admin` on
-> the extension's interpreter, or root).
+> the extension's interpreter, or root). An interface that fails to open is logged and
+> skipped; the extension exits only if none opens.
 
 ### Live from a remote bench (pipe / SSH)
 
@@ -130,6 +131,7 @@ The signals appear live in the Zelos app exactly as on the bench. Notes:
 | `interfaces[].interface` | Interface to capture (picked from `V2G/list_interfaces`). |
 | `interfaces[].name` | Branch name (default: the interface, catalog-sanitized). Must be unique. |
 | `advanced.prefix` | Shared source name (default `V2G`). Clear it for one source per branch. |
+| `advanced.promiscuous` | Capture third-party unicast (default on; off for drivers that refuse it). |
 | `advanced.log_packets` | Raw `zelos.packet.v1` row per frame at `<name>/packets` (default on). |
 | `advanced.log_frames` | Keep frame bytes in the packet rows (default on). |
 | `advanced.stored_frame_bytes` | Cap on stored frame bytes (default null: every byte). |

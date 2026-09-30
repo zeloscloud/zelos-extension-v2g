@@ -53,6 +53,8 @@ def run_app_mode() -> None:
     global_source = zelos_sdk.init_global_source(prefix or LOG_SOURCE_NAME)
     shared = global_source if prefix else None
     options = packet_options(advanced)
+    promisc = bool(advanced.get("promiscuous", True))
+    v2g_actions.PROMISCUOUS = promisc
     codecs = {
         b.interface or b.name: make_codec(prefix, b, options, source=shared) for b in branches
     }
@@ -65,15 +67,18 @@ def run_app_mode() -> None:
 
     if replay:
         (codec,) = codecs.values()
-        target, args = replay_into, (codec, replay, True, stop)
-    else:
-        target, args = sniff_into, (codecs,)
-    if codecs:
-        # Daemon: a sniff blocks in the kernel and cannot be woken on stop.
+        # Daemon: exit on SIGTERM does not wait for the replay to finish.
         threading.Thread(
-            target=_log_errors(target), args=args, daemon=True, name="v2g-live"
+            target=_log_errors(replay_into), args=(codec, replay, True, stop), daemon=True
         ).start()
-        logger.info("V2G capture started: %s", ", ".join(b.name for b in branches))
+        logger.info("V2G replay started: %s", branches[0].name)
+    elif codecs:
+        failed = sniff_into(codecs, promisc)
+        if len(failed) == len(codecs):
+            logger.error("No interface could be captured (%s); stopping", ", ".join(failed))
+            sys.exit(1)
+        up = [b.name for b in branches if b.interface not in failed]
+        logger.info("V2G capture started: %s", ", ".join(up))
     else:
         logger.info("No interfaces configured; serving actions only")
 
@@ -86,6 +91,6 @@ def _log_errors(fn):
         try:
             fn(*args)
         except Exception:
-            logger.exception("V2G capture stopped on error (run the Check Permissions action)")
+            logger.exception("V2G replay stopped on error")
 
     return run
