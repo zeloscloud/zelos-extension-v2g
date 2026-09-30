@@ -32,7 +32,7 @@ The synthetic CAN frames carry known values so decoding is verifiable: `BMS_Stat
 unknown id (0x7FF) that stays raw-only. `make_combined_fixture.py` regenerates the
 pcapng (`uv run python tests/files/make_combined_fixture.py`).
 
-Convert it and you get one time-aligned trace with `can*/*` and `v2g/*`:
+Convert it and you get one time-aligned trace under `V2G/combined_can_v2g/`, CAN at `CAN/*`:
 
 ```bash
 uv run python main.py convert tests/files/combined_can_v2g.pcapng --dbc tests/files/example.dbc -o /tmp/combined.trz
