@@ -35,7 +35,7 @@ def _build_decoder(codec: V2gCodec, retime=lambda ts: ts) -> V2gStreamDecoder:
     modes produce identical rows.
 
     ``retime`` maps each record's timestamp before emit (identity for live capture;
-    arrival-time for replay, so a replayed pcap appears in the live view).
+    a constant shift to now for replay, so a replayed pcap appears in the live view).
     """
 
     def on_slac(f: SlacFrame) -> None:
@@ -56,27 +56,27 @@ def _build_decoder(codec: V2gCodec, retime=lambda ts: ts) -> V2gStreamDecoder:
 def _replay_into(codec: V2gCodec, path: str, realtime: bool) -> None:
     """Replay a capture into ``codec``'s live source.
 
-    ``realtime`` (default): release each frame at its real offset from the first —
-    i.e. honor the capture's inter-frame deltas — and stamp it at arrival, so the
+    ``realtime`` (default): shift every timestamp by one constant offset so the first
+    frame lands at now, and release each frame when its shifted time comes, so the
     session plays out in the live view over its true duration (like ``tcpreplay``).
+    Spacing stays exact; only the epoch moves.
     Otherwise feed as fast as possible, preserving the original capture timestamps
     (used by tests and quick offline import).
     """
     from scapy.utils import PcapReader
 
+    offset: float | None = None
     decoder = _build_decoder(
-        codec, retime=(lambda ts: time.time()) if realtime else (lambda ts: ts)
+        codec, retime=(lambda ts: ts + offset) if realtime else (lambda ts: ts)
     )
     with PcapReader(path) as reader:
-        wall_start = time.time()
-        first_ts: float | None = None
         for pkt in reader:
             if realtime:
                 ts = float(pkt.time)
-                if first_ts is None:
-                    first_ts = ts
-                # Sleep until this frame's real offset from the first one has elapsed.
-                delay = (wall_start + (ts - first_ts)) - time.time()
+                if offset is None:
+                    offset = time.time() - ts
+                # Sleep until this frame is due on the shifted clock.
+                delay = ts + offset - time.time()
                 if delay > 0:
                     time.sleep(delay)
             decoder.feed_packet(pkt)

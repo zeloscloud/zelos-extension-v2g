@@ -323,13 +323,28 @@ def test_replay_paces_by_capture_deltas(monkeypatch: pytest.MonkeyPatch) -> None
     span = times[-1] - times[0]
     assert span > 1.0  # the SLAC retries play out over seconds — a real schedule, not 0
 
+    class _StampingCodec(_CountingCodec):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stamps: list[float] = []
+
+        def emit_slac(self, f) -> None:
+            self.stamps.append(f.ts)
+
     delays: list[float] = []
     monkeypatch.setattr(_time, "sleep", lambda d: delays.append(d))
-    sniff_into(_CountingCodec(), replay=str(SLAC_FAIL), realtime=True)
+    codec = _StampingCodec()
+    sniff_into(codec, replay=str(SLAC_FAIL), realtime=True)
 
     # Frames were paced out to ~the capture span (a fast burst would schedule ~nothing).
     assert delays, "expected real-time pacing to schedule sleeps"
     assert max(delays) == pytest.approx(span, abs=2.0)
+    # One constant shift: stamps land near now with the capture's exact spacing.
+    src = [f.ts for f in decode_session(SLAC_FAIL).slac]
+    assert codec.stamps[0] == pytest.approx(_time.time(), abs=5.0)
+    assert [s - codec.stamps[0] for s in codec.stamps] == pytest.approx(
+        [t - src[0] for t in src], abs=1e-6
+    )
 
 
 def test_decode_stream_matches_batch() -> None:
