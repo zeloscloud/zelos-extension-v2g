@@ -21,8 +21,9 @@ from zelos_sdk.actions import ActionsRegistry, action
 
 logger = logging.getLogger(__name__)
 
-#: Interfaces the running extension was configured with; set by app mode.
+#: The running extension's interfaces and promiscuous setting; set by app mode.
 CONFIGURED_INTERFACES: list[str] = []
+PROMISCUOUS = True
 
 
 def _interfaces() -> list[dict[str, Any]]:
@@ -100,44 +101,63 @@ def _remediation(system: str) -> str:
     return "Live capture is supported on Linux and macOS. Use Replay PCAP File instead."
 
 
+def _probe(iface: str, promisc: bool, known: set[str], system: str) -> dict[str, Any]:
+    from .live import open_capture
+
+    if iface not in known:
+        # Not a permission problem: the fix is a different name, not a grant.
+        return {
+            "interface": iface,
+            "can_capture": False,
+            "reason": f"Interface {iface!r} not found. Run the List Interfaces action.",
+        }
+    try:
+        open_capture(iface, promisc).close()
+    except Exception as exc:  # noqa: BLE001 - any refusal is the answer here
+        result = {
+            "interface": iface,
+            "can_capture": False,
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+        # Linux raises PermissionError; macOS scapy reports every /dev/bpf refused.
+        if isinstance(exc, PermissionError) or "No /dev/bpf handle" in str(exc):
+            result["remediation"] = _remediation(system)
+        elif "promiscuous" in str(exc):
+            result["remediation"] = (
+                "Turn off Advanced > Promiscuous Mode for this interface's driver."
+            )
+        return result
+    return {"interface": iface, "can_capture": True}
+
+
 @action(
     "Check Permissions",
-    "Try to open a capture on an interface and, if refused, return the exact fix.",
+    "Try to open a capture on each configured interface (or the one given) with the "
+    "configured promiscuous setting and, if refused, return the exact fix.",
 )
 @action.text(
     "interface",
     title="Interface",
-    description="Defaults to the first configured interface.",
+    description="Defaults to every configured interface.",
     required=False,
     default="",
     placeholder="eth0",
 )
 def check_permissions(interface: str = "") -> dict[str, Any]:
-    import scapy.sendrecv  # noqa: F401 - loads the platform's capture sockets
-    from scapy.config import conf
-
     system = platform.system()
-    target = interface.strip() or next(iter(CONFIGURED_INTERFACES), "")
-    if not target:
-        target = next((i["name"] for i in _interfaces() if i["is_up"]), "")
-    result = {"interface": target, "platform": system, "python": sys.executable}
-    if target not in {i["name"] for i in _interfaces()}:
-        # Not a permission problem: the fix is a different name, not a grant.
-        return {
-            **result,
-            "status": "error",
-            "can_capture": False,
-            "reason": f"Interface {target!r} not found. Run the List Interfaces action.",
-        }
-    try:
-        conf.L2listen(iface=target).close()
-    except Exception as exc:  # noqa: BLE001 - any refusal is the answer here
-        result.update(status="error", can_capture=False, reason=f"{type(exc).__name__}: {exc}")
-        # Linux raises PermissionError; macOS scapy reports every /dev/bpf refused.
-        if isinstance(exc, PermissionError) or "No /dev/bpf handle" in str(exc):
-            result["remediation"] = _remediation(system)
-        return result
-    return {**result, "status": "success", "can_capture": True}
+    interfaces = _interfaces()
+    targets = [interface.strip()] if interface.strip() else list(CONFIGURED_INTERFACES)
+    if not targets:
+        targets = [next((i["name"] for i in interfaces if i["is_up"]), "")]
+    known = {i["name"] for i in interfaces}
+    results = [_probe(t, PROMISCUOUS, known, system) for t in targets]
+    return {
+        "status": "success" if all(r["can_capture"] for r in results) else "error",
+        "promiscuous": PROMISCUOUS,
+        "platform": system,
+        "python": sys.executable,
+        "interfaces": results,
+    }
 
 
 @action(

@@ -68,18 +68,39 @@ def replay_into(codec: V2gCodec, path: str | Path, realtime: bool = True, stop=N
     logger.info("Replay complete: %d V2G messages streamed", codec.stats.messages)
 
 
-def sniff_into(codecs: dict[str, V2gCodec]) -> None:
-    """Sniff every interface in ``codecs`` (keyed by interface) and route each frame
-    to its interface's codec by ``pkt.sniffed_on``. Blocks; run it on a thread."""
+def open_capture(iface: str, promisc: bool = True):
+    """A scapy listen socket on ``iface`` with the V2G filter. Raises on refusal."""
+    import scapy.sendrecv  # noqa: F401 - loads the platform's capture sockets
+    from scapy.config import conf
+
+    return conf.L2listen(iface=iface, promisc=promisc, filter=_BPF)
+
+
+def sniff_into(codecs: dict[str, V2gCodec], promisc: bool = True) -> list[str]:
+    """Open one capture per interface in ``codecs`` (keyed by interface) and sniff each
+    on its own daemon thread into its codec. An interface that fails to open is logged
+    and skipped; the others keep capturing.
+
+    Returns the interfaces that failed.
+    """
     from scapy.sendrecv import sniff
 
-    def route(pkt) -> None:
-        codec = codecs.get(pkt.sniffed_on)
-        if codec is not None:
-            codec.feed(pkt)
-
-    logger.info("Sniffing live V2G on %s", ", ".join(codecs))
-    sniff(iface=list(codecs), prn=route, filter=_BPF, store=False)
+    failed: list[str] = []
+    for iface, codec in codecs.items():
+        try:
+            sock = open_capture(iface, promisc)
+        except Exception as exc:  # noqa: BLE001 - any refusal skips just this interface
+            logger.error("Cannot capture on %s: %s: %s", iface, type(exc).__name__, exc)
+            failed.append(iface)
+            continue
+        threading.Thread(
+            target=sniff,
+            kwargs={"opened_socket": sock, "prn": codec.feed, "store": False},
+            daemon=True,  # blocks in the kernel; process exit tears it down
+            name=f"v2g-{iface}",
+        ).start()
+        logger.info("Sniffing live V2G on %s%s", iface, "" if promisc else " (not promiscuous)")
+    return failed
 
 
 def flush_every(codecs: list[V2gCodec], stop: threading.Event) -> None:
@@ -134,11 +155,12 @@ def run_live(
     codecs = {
         i: make_codec(prefix, Branch(branch_name(i), i), options, source=shared) for i in ifaces
     }
+    if len(sniff_into(codecs)) == len(codecs):
+        raise SystemExit("no interface could be captured")
     stop = threading.Event()
-    threading.Thread(target=flush_every, args=(list(codecs.values()), stop), daemon=True).start()
     try:
-        sniff_into(codecs)
-    finally:
+        flush_every(list(codecs.values()), stop)  # until Ctrl-C
+    except KeyboardInterrupt:
         stop.set()
         for codec in codecs.values():
             codec.flush()

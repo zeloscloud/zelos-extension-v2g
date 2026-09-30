@@ -18,7 +18,7 @@ both CAN and V2G converts to one time-aligned `.trz`.
 | `socketcan.py` | Parse `LINKTYPE_CAN_SOCKETCAN` (227) records → `CanFrame`. |
 | `can_ingest.py` | Glue to `zelos_can.CanDecoder` (raw + DBC decode lives in `zelos-can`). |
 | `converter.py` | `convert_capture(in, out, dbc=, prefix=, log_packets=)` — any capture → `.trz`. |
-| `live.py` | `sniff_into` (routes by `pkt.sniffed_on`), `replay_into`, `decode_stream_into` (stdin). |
+| `live.py` | `sniff_into` (one socket + thread per interface; failures skipped), `replay_into`, `decode_stream_into`. |
 | `cli/` | `app.py` (agent app-mode), `convert.py`, `live.py`, `decode.py`. |
 | `exi/libv2g.py`, `exi/_lib/` | ctypes binding + prebuilt libcbv2g shim (one per platform). |
 | `native/` | The C shim (`v2g_din_shim.c`) + build scripts. |

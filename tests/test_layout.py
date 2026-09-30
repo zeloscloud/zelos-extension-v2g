@@ -42,24 +42,31 @@ def _ns(iso: str) -> int:
 
 
 def test_interfaces_route_to_their_own_branch(tmp_path: Path, monkeypatch) -> None:
-    config = {"interfaces": [{"interface": "en0"}, {"interface": "eth0.1"}]}
+    config = {"interfaces": [{"interface": "en0"}, {"interface": "eth0.1"}, {"interface": "bad0"}]}
     branches = parse_interfaces(config, "V2G")
-    assert [b.name for b in branches] == ["en0", "eth0_1"]
+    assert [b.name for b in branches] == ["en0", "eth0_1", "bad0"]
     with pytest.raises(ConfigError, match="Duplicate name 'eth0_1'"):
         parse_interfaces({"interfaces": [*config["interfaces"], {"interface": "eth0_1"}]}, "V2G")
 
-    def fake_sniff(iface, prn, **_):
-        assert iface == ["en0", "eth0.1"]
-        for path, on in ((FIXTURE, "en0"), (SLAC_FAIL, "eth0.1")):
-            with PcapReader(str(path)) as reader:
-                for pkt in reader:
-                    pkt.sniffed_on = on
-                    prn(pkt)
+    import threading
 
     import scapy.sendrecv
 
-    from zelos_extension_v2g.live import sniff_into
+    from zelos_extension_v2g import live
 
+    captures = {"en0": FIXTURE, "eth0.1": SLAC_FAIL}
+
+    def fake_open(iface, promisc):
+        if iface not in captures:
+            raise OSError(f"Cannot set promiscuous mode on interface ({iface})!")
+        return captures[iface]
+
+    def fake_sniff(opened_socket, prn, **_):
+        with PcapReader(str(opened_socket)) as reader:
+            for pkt in reader:
+                prn(pkt)
+
+    monkeypatch.setattr(live, "open_capture", fake_open)
     monkeypatch.setattr(scapy.sendrecv, "sniff", fake_sniff)
     out = tmp_path / "live.trz"
     ns = zelos_sdk.TraceNamespace("test")
@@ -68,7 +75,11 @@ def test_interfaces_route_to_their_own_branch(tmp_path: Path, monkeypatch) -> No
         codecs = {
             b.interface: make_codec("V2G", b, PacketOptions(), source=source) for b in branches
         }
-        sniff_into(codecs)
+        # A refused interface is skipped; the others keep capturing.
+        assert live.sniff_into(codecs) == ["bad0"]
+        for t in threading.enumerate():
+            if t.name.startswith("v2g-"):
+                t.join()
         for codec in codecs.values():
             codec.flush()
 
