@@ -44,13 +44,17 @@ def _socketcan_record(can_id: int, extended: bool, dlc: int, data: bytes) -> byt
     return struct.pack(">I", idfield) + bytes([dlc & 0xFF, 0, 0, 0]) + data.ljust(8, b"\x00")
 
 
-def _write_socketcan_pcap(path: Path, frames) -> None:
-    """Write a classic pcap (LINKTYPE_CAN_SOCKETCAN = 227) of the given frames."""
+def _write_socketcan_pcap(
+    path: Path, frames, extra: tuple[bytes, ...] = (), dlt: int = 227
+) -> None:
+    """Write a classic pcap (LINKTYPE_CAN_SOCKETCAN = 227) of the given frames, then
+    the ``extra`` raw records."""
+    records = [(ts, _socketcan_record(cid, ext, dlc, data)) for ts, cid, ext, dlc, data in frames]
+    records += [(2000.0 + i, rec) for i, rec in enumerate(extra)]
     with path.open("wb") as f:
-        # global header: magic, v2.4, thiszone, sigfigs, snaplen, network=227
-        f.write(struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 227))
-        for ts, cid, ext, dlc, data in frames:
-            rec = _socketcan_record(cid, ext, dlc, data)
+        # global header: magic, v2.4, thiszone, sigfigs, snaplen, network
+        f.write(struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, dlt))
+        for ts, rec in records:
             sec = int(ts)
             usec = int(round((ts - sec) * 1_000_000))
             f.write(struct.pack("<IIII", sec, usec, len(rec), len(rec)) + rec)
@@ -86,34 +90,57 @@ def _sources(paths: set[str]) -> set[str]:
     return {p.split("/")[1] for p in paths if "/" in p}
 
 
-def test_parse_socketcan_standard_and_extended() -> None:
-    f = parse_socketcan(1.0, _socketcan_record(0x140, False, 2, b"\x64\x00"))
-    assert f is not None
-    assert (f.can_id, f.extended, f.remote, f.dlc, f.data) == (0x140, False, False, 2, b"\x64\x00")
+# A 72-byte CAN FD record (12 data bytes) and a CAN error frame.
+_FD_RECORD = struct.pack(">I", 0x123) + bytes([12, 0x04, 0, 0]) + bytes(range(12)).ljust(64, b"\0")
+_ERROR_RECORD = _socketcan_record(0x20000004, False, 8, bytes(8))
 
-    g = parse_socketcan(2.0, _socketcan_record(0x12345678, True, 4, b"\xde\xad\xbe\xef"))
+
+def test_parse_socketcan_standard_and_extended() -> None:
+    f = parse_socketcan(_socketcan_record(0x140, False, 2, b"\x64\x00"))
+    assert f is not None
+    assert (f.can_id, f.extended, f.remote, f.fd, f.data) == (
+        0x140,
+        False,
+        False,
+        False,
+        b"\x64\x00",
+    )
+
+    g = parse_socketcan(_socketcan_record(0x12345678, True, 4, b"\xde\xad\xbe\xef"))
     assert g is not None
-    assert (g.can_id, g.extended, g.dlc, g.data) == (0x12345678, True, 4, b"\xde\xad\xbe\xef")
+    assert (g.can_id, g.extended, g.data) == (0x12345678, True, b"\xde\xad\xbe\xef")
+
+    h = parse_socketcan(_FD_RECORD)
+    assert h is not None
+    assert (h.can_id, h.fd, h.data) == (0x123, True, bytes(range(12)))
 
 
 def test_parse_socketcan_rejects_malformed() -> None:
-    assert parse_socketcan(0.0, b"\x00" * 15) is None  # wrong length
-    assert parse_socketcan(0.0, _socketcan_record(0x1, False, 9, b"")) is None  # dlc > 8
+    assert parse_socketcan(b"\x00" * 15) is None  # wrong length
+    assert parse_socketcan(_socketcan_record(0x1, False, 9, b"")) is None  # dlc > 8
 
 
-def test_convert_can_only_raw_frames(can_pcap: Path, tmp_path: Path) -> None:
+def test_convert_can_only_raw_frames(tmp_path: Path) -> None:
+    can_pcap = tmp_path / "canbus.pcap"
+    _write_socketcan_pcap(can_pcap, _FRAMES, extra=(_FD_RECORD, _ERROR_RECORD, bytes(20)))
     stats = convert_capture(can_pcap, tmp_path / "can.trz")
-    assert stats.can_frames == 4
+    assert stats.can_frames == 5  # the 4 classic frames + the FD one
+    assert (stats.can_error_frames, stats.can_bad_records) == (1, 1)  # skipped, counted
     assert stats.can_decoded_frames == 0  # no DBC => raw frames only
     assert stats.v2g.messages == 0
     assert _event_types(tmp_path / "can.trz")["*/V2G/canbus/CAN/Frame"] == "zelos.can.frame.v1"
+
+    # CAN is the link type, not "not Ethernet": a 16-byte record on DLT_NULL is no frame.
+    null_pcap = tmp_path / "null.pcap"
+    _write_socketcan_pcap(null_pcap, _FRAMES, dlt=0)
+    assert convert_capture(null_pcap, tmp_path / "null.trz").can_frames == 0
 
 
 def test_convert_can_with_dbc(can_pcap: Path, tmp_path: Path) -> None:
     dbc = tmp_path / "mini.dbc"
     dbc.write_text(_MINI_DBC)
     out = tmp_path / "can_dbc.trz"
-    stats = convert_capture(can_pcap, out, dbc=dbc)
+    stats = convert_capture(can_pcap, out, [dbc])
     assert stats.can_frames == 4
     assert stats.can_decoded_frames == 2  # the two 0x140 frames match Msg320
     assert any(
@@ -137,9 +164,9 @@ def test_combined_shares_one_writer(tmp_path: Path) -> None:
         v2g = make_codec("V2G", Branch("x"), PacketOptions(log_packets=False), namespace=ns)
         can = CanIngest(v2g.source, "x")
         v2g.emit_slac(
-            SlacFrame(ts=1.0, mmtype=0x6064, name="CM_SLAC_PARM.REQ", src_mac="a", dst_mac="b")
+            SlacFrame(ts_ns=10**9, mmtype=0x6064, name="CM_SLAC_PARM.REQ", src_mac="a", dst_mac="b")
         )
-        can.emit(parse_socketcan(1.0, _socketcan_record(0x140, False, 2, b"\x64\x00")))
+        can.emit(10**9, _socketcan_record(0x140, False, 2, b"\x64\x00"))
 
     paths = _field_paths(out)
     assert _sources(paths) == {"V2G"}
@@ -183,7 +210,7 @@ def test_combined_capture_queries_both_families(tmp_path: Path) -> None:
     known frame contents)."""
     pytest.importorskip("pyarrow")
     out = tmp_path / "combined.trz"
-    stats = convert_capture(COMBINED_FIXTURE, out, dbc=EXAMPLE_DBC)
+    stats = convert_capture(COMBINED_FIXTURE, out, [EXAMPLE_DBC])
 
     # both protocols decoded from the one capture
     assert stats.v2g.messages == 274
@@ -221,7 +248,7 @@ def test_combined_capture_queries_both_families(tmp_path: Path) -> None:
         PacketOptions(log_packets=False),
         namespace=replay_ns,
         can=True,
-        dbc=str(EXAMPLE_DBC),
+        dbcs=[str(EXAMPLE_DBC)],
     )
     replay_into(codec, COMBINED_FIXTURE, realtime=False)
     m = codec.can.metrics()

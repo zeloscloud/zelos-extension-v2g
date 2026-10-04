@@ -13,14 +13,20 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import zelos_sdk
 from scapy.config import conf
 
+# Importing registers DLT 227 (SocketCAN): its records dissect as CAN (CANFD when 72
+# bytes), so the link type, not a guess from the bytes, says what is CAN.
+from scapy.layers.can import CAN
+
 from . import slac
-from .can_ingest import CanIngest, socketcan_frame
+from .can_ingest import CanIngest
 from .exi import libv2g
 from .pcap import SdpFrame, SlacFrame, V2gMessage
 from .stream import V2gStreamDecoder
@@ -78,6 +84,17 @@ ENERGY_TRANSFER = [
     "DC_unique",
 ]
 
+# supportedAppProtocol has its own response codes.
+_SAP_RESPONSE_CODE = dict(
+    enumerate(
+        [
+            "OK_SuccessfulNegotiation",
+            "OK_SuccessfulNegotiationWithMinorDeviation",
+            "Failed_NoNegotiation",
+        ]
+    )
+)
+
 _VALUE_TABLES = {
     "response_code": dict(enumerate(RESPONSE_CODE)),
     "evse_status_code": dict(enumerate(EVSE_STATUS_CODE)),
@@ -86,11 +103,64 @@ _VALUE_TABLES = {
 }
 
 
-# Field name -> (zelos DataType, unit). The shim↔codec contract: every field the
-# libcbv2g shim emits must appear here, or it is dropped from the trace.
+# Message -> every field the shim can emit for it (DIN and ISO 15118-2 share names),
+# so each event's schema is complete up front: the shim emits optional fields only
+# when present. The shim↔codec contract: a field missing here is dropped.
+_MSG_FIELDS: dict[str, tuple[str, ...]] = {
+    "SessionSetupReq": ("evccid",),
+    "SessionSetupRes": ("response_code", "evse_id", "datetime_now"),
+    "ServiceDiscoveryRes": ("response_code",),
+    "ServicePaymentSelectionRes": ("response_code",),
+    "PaymentServiceSelectionRes": ("response_code",),
+    "ContractAuthenticationRes": ("response_code",),
+    "AuthorizationRes": ("response_code",),
+    "ChargeParameterDiscoveryReq": (
+        "requested_energy_transfer",
+        "soc",
+        "ev_max_voltage",
+        "ev_max_current",
+        "ev_max_power",
+        "ev_energy_capacity",
+        "full_soc",
+        "bulk_soc",
+    ),
+    "ChargeParameterDiscoveryRes": (
+        "response_code",
+        "evse_processing",
+        "evse_max_voltage",
+        "evse_max_current",
+        "evse_max_power",
+    ),
+    "CableCheckReq": ("soc",),
+    "CableCheckRes": ("response_code", "evse_processing", "evse_status_code"),
+    "PreChargeReq": ("soc", "ev_target_voltage", "ev_target_current"),
+    "PreChargeRes": ("response_code", "evse_present_voltage", "evse_status_code"),
+    "PowerDeliveryRes": ("response_code",),
+    "CurrentDemandReq": ("soc", "ev_target_voltage", "ev_target_current", "charging_complete"),
+    "CurrentDemandRes": (
+        "response_code",
+        "evse_present_voltage",
+        "evse_present_current",
+        "evse_status_code",
+    ),
+    "ChargingStatusRes": ("response_code",),
+    "WeldingDetectionRes": ("response_code", "evse_present_voltage"),
+    "SessionStopRes": ("response_code",),
+    "SupportedAppProtocolReq": (
+        "num_protocols",
+        "protocol",
+        "version_major",
+        "version_minor",
+        "schema_id",
+    ),
+    "SupportedAppProtocolRes": ("response_code", "schema_id"),
+}
+
+# Field name -> (zelos DataType, unit), widths per the DIN / ISO 15118-2 / SAP XSD
+# types (percentValueType is xs:byte; versions are xs:unsignedInt).
 _DT = zelos_sdk.DataType
 _FIELD_META: dict[str, tuple[Any, str | None]] = {
-    "soc": (_DT.UInt8, "%"),
+    "soc": (_DT.Int8, "%"),
     "ev_target_voltage": (_DT.Float32, "V"),
     "ev_target_current": (_DT.Float32, "A"),
     "evse_present_voltage": (_DT.Float32, "V"),
@@ -101,8 +171,8 @@ _FIELD_META: dict[str, tuple[Any, str | None]] = {
     "charging_complete": (_DT.Boolean, None),
     "evccid": (_DT.String, None),
     "protocol": (_DT.String, None),
-    "version_major": (_DT.UInt8, None),
-    "version_minor": (_DT.UInt8, None),
+    "version_major": (_DT.UInt32, None),
+    "version_minor": (_DT.UInt32, None),
     "schema_id": (_DT.UInt8, None),
     "num_protocols": (_DT.UInt8, None),
     "evse_id": (_DT.String, None),
@@ -115,8 +185,8 @@ _FIELD_META: dict[str, tuple[Any, str | None]] = {
     "ev_max_current": (_DT.Float32, "A"),
     "ev_max_power": (_DT.Float32, "W"),
     "ev_energy_capacity": (_DT.Float32, "Wh"),
-    "full_soc": (_DT.UInt8, "%"),
-    "bulk_soc": (_DT.UInt8, "%"),
+    "full_soc": (_DT.Int8, "%"),
+    "bulk_soc": (_DT.Int8, "%"),
 }
 
 # Coerce a decoded JSON value to the Python type the field's DataType expects.
@@ -144,7 +214,6 @@ class ConversionStats:
     messages: int = 0
     decoded_messages: int = 0
     protocol: str | None = None
-    duration_seconds: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -153,14 +222,12 @@ class ConversionStats:
             "messages": self.messages,
             "decoded_messages": self.decoded_messages,
             "protocol": self.protocol,
-            "duration_seconds": round(self.duration_seconds, 3)
-            if self.duration_seconds is not None
-            else None,
         }
 
 
-def _ts_ns(ts: float) -> int:
-    return int(ts * 1e9)
+def _ts_ns(t) -> int:
+    """``pkt.time`` -> epoch ns. Exact for scapy's Decimal capture stamps (no float)."""
+    return int(t * 10**9)
 
 
 def trace_layout(prefix: str, name: str) -> tuple[str, str | None]:
@@ -181,20 +248,24 @@ class V2gCodec:
     def __init__(
         self,
         source: zelos_sdk.TraceSource,
+        name: str,
         event_prefix: str | None = None,
         packets: Any = None,
-        can_name: str | None = None,
-        dbc: str | None = None,
+        can: bool = False,
+        dbcs: Sequence[str] = (),
     ) -> None:
         self.source = source
+        self.name = name
         # Set for file paths (convert, replay, stdin): SocketCAN frames decode into
-        # `<can_name>/CAN/...`, the CanIngest created on the first one.
-        self.can_name = can_name
-        self.dbc = dbc
+        # `<name>/CAN/...`, the CanIngest created on the first one.
+        self.decode_can = can
+        self.dbcs = list(dbcs)
         self.can: CanIngest | None = None
         self._prefix = f"{event_prefix}/" if event_prefix else ""
         self.packets = packets  # zelos_packet.PacketDecoder or None
         self.stats = ConversionStats()
+        self.frames = 0
+        self.frame_errors: Counter[str] = Counter()
         self._decoded_events: dict[str, Any] = {}
         self._define_layer1_schema()
         self._stream = V2gStreamDecoder(
@@ -207,27 +278,54 @@ class V2gCodec:
     # ── frame in (live, replay, stdin, convert) ───────────────────────────
 
     def feed(self, pkt) -> None:
-        """One captured frame: a SocketCAN frame, or its packet row then V2G decode,
-        all stamped ``pkt.time``."""
-        if self.can_name is not None and (frame := socketcan_frame(pkt)) is not None:
-            if self.can is None:
-                self.can = CanIngest(self.source, self.can_name, dbc=self.dbc)
-            self.can.emit(frame)
-            return
-        if self.packets is not None:
-            dlt = conf.l2types.layer2num.get(type(pkt))
-            if dlt is not None:
-                self.packets.decode_frame(
-                    pkt.original or bytes(pkt),
-                    link_type=dlt,
-                    timestamp_ns=_ts_ns(float(pkt.time)),
+        """One captured frame, all rows stamped ``pkt.time``. Never raises: a frame
+        that fails is logged (first per exception type) and counted, so one bad
+        frame cannot end a capture."""
+        self.frames += 1
+        try:
+            self._feed(pkt)
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            kind = type(exc).__name__
+            if kind not in self.frame_errors:
+                logger.exception(
+                    "%s: frame %d (t=%s) failed; further %s are counted",
+                    self.name,
+                    self.frames,
+                    pkt.time,
+                    kind,
                 )
-        self._stream.feed_packet(pkt)
+            self.frame_errors[kind] += 1
+
+    def _feed(self, pkt) -> None:
+        ts_ns = _ts_ns(pkt.time)
+        raw = pkt.original or bytes(pkt)
+        if self.decode_can and isinstance(pkt, CAN):
+            if self.can is None:
+                self.can = CanIngest(self.source, self.name, self.dbcs)
+            self.can.emit(ts_ns, raw)
+            return
+        dlt = conf.l2types.layer2num.get(type(pkt))
+        if self.packets is not None and dlt is not None:
+            self.packets.decode_frame(
+                raw, link_type=dlt, timestamp_ns=ts_ns, orig_len=getattr(pkt, "wirelen", None)
+            )
+        self._stream.feed_packet(pkt, ts_ns)
 
     def flush(self) -> None:
         """Push buffered packet rows through; ``decode_frame`` has no timer of its own."""
         if self.packets is not None:
             self.packets.flush()
+
+    def report_errors(self) -> None:
+        """Log the per-type count of frames that failed, if any."""
+        if self.frame_errors:
+            logger.error(
+                "%s: %d of %d frames failed: %s",
+                self.name,
+                self.frame_errors.total(),
+                self.frames,
+                dict(self.frame_errors),
+            )
 
     # ── Layer 1: framing ──────────────────────────────────────────────────
 
@@ -286,50 +384,47 @@ class V2gCodec:
             ],
         )
 
-    # ── Layer 2: decoded application messages (lazy per-type schema) ───────
+    # ── Layer 2: decoded application messages (per-type schema from _MSG_FIELDS) ──
 
-    def _decoded_event(self, msg: str, fields: list[str]) -> Any:
-        # Schema is created once from the first instance's field set; safe because
-        # the shim emits a fixed field set per message type.
-        event = self._decoded_events.get(msg)
-        if event is not None:
-            return event
-        F = zelos_sdk.TraceEventFieldMetadata
-        metas = [F(f, *_FIELD_META[f]) for f in fields if f in _FIELD_META]
-        if not metas:
-            return None
-        name = self._event(_snake(msg))
-        event = self.source.add_event(name, metas)
-        for f in fields:
-            if f in _VALUE_TABLES:
-                self.source.add_value_table(name, f, _VALUE_TABLES[f])
+    def _decoded_event(self, msg: str) -> Any:
+        if msg in self._decoded_events:
+            return self._decoded_events[msg]
+        fields = _MSG_FIELDS.get(msg, ())
+        event = None
+        if fields:
+            F = zelos_sdk.TraceEventFieldMetadata
+            name = self._event(_snake(msg))
+            event = self.source.add_event(name, [F(f, *_FIELD_META[f]) for f in fields])
+            for f in fields:
+                table = _VALUE_TABLES.get(f)
+                if msg == "SupportedAppProtocolRes" and f == "response_code":
+                    table = _SAP_RESPONSE_CODE
+                if table:
+                    self.source.add_value_table(name, f, table)
         self._decoded_events[msg] = event
         return event
 
     def _emit_decoded(self, decoded: dict, ts_ns: int) -> bool:
         msg = decoded.get("msg")
-        if not msg:
-            return False
-        fields = [k for k in decoded if k != "msg"]
-        event = self._decoded_event(msg, fields)
+        event = self._decoded_event(msg) if msg else None
         if event is None:
             return False
+        fields = _MSG_FIELDS[msg]
         signals: dict[str, Any] = {}
-        for f in fields:
-            meta = _FIELD_META.get(f)
-            if meta is None:
+        for f, v in decoded.items():
+            if f in fields:
+                signals[f] = _COERCERS.get(_FIELD_META[f][0], int)(v)
+            elif f != "msg":
                 logger.debug("decoded field %r of %s has no Zelos mapping; skipped", f, msg)
-                continue
-            signals[f] = _COERCERS.get(meta[0], int)(decoded[f])
         event.log_at(ts_ns, **signals)
         return True
 
-    # ── per-record emit (shared by batch convert + live capture) ──────────
+    # ── per-record emit ───────────────────────────────────────────────────
 
     def emit_slac(self, f: SlacFrame) -> None:
         self.stats.slac_frames += 1
         self.slac_event.log_at(
-            _ts_ns(f.ts),
+            f.ts_ns,
             mmtype=f.mmtype,
             name=f.name,
             src_mac=f.src_mac,
@@ -342,7 +437,7 @@ class V2gCodec:
             if a:
                 aag = a["aag"]
                 self.slac_attenuation_event.log_at(
-                    _ts_ns(f.ts),
+                    f.ts_ns,
                     run_id=a["run_id"],
                     num_sounds=a["num_sounds"],
                     num_groups=a["num_groups"],
@@ -354,13 +449,13 @@ class V2gCodec:
             m = slac.parse_slac_match_cnf(f.payload)
             if m:
                 self.slac_match_event.log_at(
-                    _ts_ns(f.ts), run_id=m["run_id"], nid=m["nid"], nmk=m["nmk"]
+                    f.ts_ns, run_id=m["run_id"], nid=m["nid"], nmk=m["nmk"]
                 )
 
     def emit_sdp(self, f: SdpFrame) -> None:
         self.stats.sdp_frames += 1
         self.sdp_event.log_at(
-            _ts_ns(f.ts),
+            f.ts_ns,
             kind=f.kind,
             secc_ip=f.secc_ip or "",
             secc_port=f.secc_port or 0,
@@ -375,7 +470,7 @@ class V2gCodec:
         ``dialect`` is the grammar that actually decoded this message (factual, never
         guessed): the SAP-negotiated protocol, or the DIN/ISO grammar that matched.
         """
-        ts_ns = _ts_ns(m.ts)
+        ts_ns = m.ts_ns
         decoded: dict | None = None
         dialect: str | None = None
         if libv2g.available():

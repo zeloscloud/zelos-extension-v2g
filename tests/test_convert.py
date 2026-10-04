@@ -5,15 +5,18 @@ tests/files/README.md): a Tesla Model Y DC session (primary fixture — full DIN
 handshake through PreCharge) and a Porsche Taycan SLAC-failure capture.
 """
 
+import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from zelos_extension_v2g import slac
+from zelos_extension_v2g.codec import _FIELD_META, _MSG_FIELDS, _ts_ns
 from zelos_extension_v2g.config import Branch, PacketOptions, make_codec
 from zelos_extension_v2g.converter import convert_capture, resolve_trz_output
 from zelos_extension_v2g.exi import libv2g
-from zelos_extension_v2g.pcap import decode_session
+from zelos_extension_v2g.stream import V2gStreamDecoder
 
 FILES = Path(__file__).parent / "files"
 FIXTURE = FILES / "2024-04-20_ModelY_pyPLC_stop_in_precharge.pcapng"
@@ -30,6 +33,19 @@ def _codec(name: str = "t"):
     return codec
 
 
+def decode_session(path: Path) -> SimpleNamespace:
+    """Every SLAC / SDP / V2G record in a capture, via the production stream decoder."""
+    from scapy.utils import PcapReader
+
+    s = SimpleNamespace(slac=[], sdp=[], messages=[])
+    dec = V2gStreamDecoder(on_slac=s.slac.append, on_sdp=s.sdp.append, on_message=s.messages.append)
+    with PcapReader(str(path)) as reader:
+        for pkt in reader:
+            dec.feed_packet(pkt, _ts_ns(pkt.time))
+    s.secc_ip, s.secc_port = dec.secc_ip, dec.secc_port
+    return s
+
+
 def test_decode_session_structure() -> None:
     s = decode_session(FIXTURE)
 
@@ -39,7 +55,7 @@ def test_decode_session_structure() -> None:
     assert len(s.sdp) == 2
 
     # SLAC pairing handshake is present.
-    assert len(s.slac) >= 10
+    assert len(s.slac) == 86
 
     # V2GTP application messages, both directions, all EXI (0x8001).
     assert len(s.messages) == 274
@@ -49,21 +65,24 @@ def test_decode_session_structure() -> None:
     assert "SECC->EVCC" in directions
 
     # Messages are time-ordered and carry their raw EXI payload.
-    timestamps = [m.ts for m in s.messages]
+    timestamps = [m.ts_ns for m in s.messages]
     assert timestamps == sorted(timestamps)
     assert all(len(m.exi) == m.length for m in s.messages)
+    assert [m.index for m in s.messages] == list(range(274))
 
 
 def test_convert_produces_trz(tmp_path: Path) -> None:
     out = tmp_path / "session.trz"
-    stats = convert_capture(FIXTURE, out).v2g
+    capture = convert_capture(FIXTURE, out)
+    stats = capture.v2g
 
     assert out.exists()
     assert out.stat().st_size > 0
     assert stats.messages == 274
     assert stats.sdp_frames == 2
     assert stats.slac_frames == 86
-    assert stats.duration_seconds is not None and stats.duration_seconds > 0
+    assert capture.duration_seconds is not None and capture.duration_seconds > 0
+    assert capture.frame_errors == {}
 
 
 def test_convert_rejects_unknown_extension(tmp_path: Path) -> None:
@@ -232,31 +251,6 @@ def test_trace_fields_present_via_reader(tmp_path: Path) -> None:
     assert not missing, f"missing decoded fields in trace: {sorted(missing)}"
 
 
-def test_stream_decoder_matches_batch() -> None:
-    """The incremental stream decoder (the live/replay path) yields the same records
-    as the batch decoder — validated by replaying the fixture through scapy sniff,
-    the same callback live capture uses."""
-    from scapy.sendrecv import sniff
-
-    from zelos_extension_v2g.stream import V2gStreamDecoder
-
-    batch = decode_session(FIXTURE)
-    slac_recs, sdp_recs, msg_recs = [], [], []
-    dec = V2gStreamDecoder(
-        on_slac=slac_recs.append, on_sdp=sdp_recs.append, on_message=msg_recs.append
-    )
-    sniff(offline=str(FIXTURE), prn=dec.feed_packet, store=False)
-
-    assert len(slac_recs) == len(batch.slac)
-    assert len(sdp_recs) == len(batch.sdp)
-    assert len(msg_recs) == len(batch.messages)
-    assert sorted(m.exi for m in msg_recs) == sorted(m.exi for m in batch.messages)
-    # Direction labels must match across paths (both call protocol.v2g_direction).
-    assert sorted(m.direction for m in msg_recs) == sorted(m.direction for m in batch.messages)
-    dirs = {m.direction for m in msg_recs}
-    assert "EVCC->SECC" in dirs and "SECC->EVCC" in dirs
-
-
 def test_layer1_without_libv2g(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """With no shim bundled, Layer-2 field decode is skipped but Layer-1 framing
     (SLAC / SDP / V2GTP message timeline) still converts — graceful degradation."""
@@ -293,18 +287,14 @@ def test_resolve_trz_output_forces_trz_suffix(tmp_path: Path) -> None:
     assert resolved.name == "out.trz"
 
 
-def test_live_emits_same_records_as_batch() -> None:
-    """Replaying the fixture through the live path emits exactly the records the batch
-    decoder produces — every frame, no synthesized summary, no extra rows."""
+def test_live_emits_same_records_as_convert() -> None:
+    """Replaying the fixture through the live path emits exactly the records convert
+    does — every frame, no synthesized summary, no extra rows."""
     from zelos_extension_v2g.live import replay_into
 
     codec = _codec()
     replay_into(codec, FIXTURE, realtime=False)
-
-    batch = decode_session(FIXTURE)
-    assert codec.stats.slac_frames == len(batch.slac)
-    assert codec.stats.sdp_frames == len(batch.sdp)
-    assert codec.stats.messages == len(batch.messages)
+    assert (codec.stats.slac_frames, codec.stats.sdp_frames, codec.stats.messages) == (86, 2, 274)
 
 
 def test_replay_paces_by_capture_deltas() -> None:
@@ -352,20 +342,16 @@ def test_replay_paces_by_capture_deltas() -> None:
     )
 
 
-def test_decode_stream_matches_batch() -> None:
+def test_decode_stream_matches_convert() -> None:
     """Decoding a pcap byte stream (as from `tcpdump -w -` piped to stdin) yields the
-    same records as the batch decoder — the `decode` subcommand's core path."""
+    same records as convert — the `decode` subcommand's core path."""
     import io
 
     from zelos_extension_v2g.live import decode_stream_into
 
     codec = _codec()
     decode_stream_into(codec, source=io.BytesIO(FIXTURE.read_bytes()))
-
-    batch = decode_session(FIXTURE)
-    assert codec.stats.slac_frames == len(batch.slac)
-    assert codec.stats.sdp_frames == len(batch.sdp)
-    assert codec.stats.messages == len(batch.messages)
+    assert (codec.stats.slac_frames, codec.stats.sdp_frames, codec.stats.messages) == (86, 2, 274)
 
 
 def test_cooked_sll_link_layer_decodes_slac() -> None:
@@ -375,7 +361,6 @@ def test_cooked_sll_link_layer_decodes_slac() -> None:
     from scapy.packet import Raw
 
     from zelos_extension_v2g.pcap import link_frame
-    from zelos_extension_v2g.stream import V2gStreamDecoder
 
     batch = decode_session(FIXTURE)
     parm = next(f for f in batch.slac if f.name == "CM_SLAC_PARM.REQ")
@@ -386,7 +371,29 @@ def test_cooked_sll_link_layer_decodes_slac() -> None:
     assert payload == parm.payload
 
     got: list = []
-    sll.time = 1.0
-    V2gStreamDecoder(on_slac=got.append).feed_packet(sll)
+    V2gStreamDecoder(on_slac=got.append).feed_packet(sll, 1)
     assert len(got) == 1
     assert got[0].name == "CM_SLAC_PARM.REQ"  # decoded the same as over Ethernet
+
+
+def test_msg_fields_cover_shim() -> None:
+    """Each decoded event's schema is the message's full field set from the shim, so a
+    later instance carrying an optional field the first lacked still logs."""
+    shim = (Path(__file__).parents[1] / "native" / "v2g_din_shim.c").read_text()
+    emitted: dict[str, set[str]] = {}
+    msg = None
+    # Message names (`M("X")` or a literal `\"msg\":\"X\"`), then the fields emitted after.
+    pattern = r'M\("(\w+)"\)|\\"msg\\":\\"(\w+)\\"|\\"(?!msg\\")(\w+)\\":'
+    for m in re.finditer(pattern, shim):
+        if m[1] or m[2]:
+            msg = m[1] or m[2]
+            emitted.setdefault(msg, set())
+        else:
+            emitted[msg].add(m[3])
+    assert {k: set(v) for k, v in _MSG_FIELDS.items()} == {k: v for k, v in emitted.items() if v}
+    assert {f for v in _MSG_FIELDS.values() for f in v} <= _FIELD_META.keys()
+
+    codec = _codec()
+    base = {"msg": "ChargeParameterDiscoveryReq", "ev_max_voltage": 500.0, "ev_max_current": 1.0}
+    assert codec._emit_decoded(base, 1)
+    assert codec._emit_decoded({**base, "bulk_soc": 80, "full_soc": 100}, 2)

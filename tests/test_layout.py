@@ -8,6 +8,7 @@ import pytest
 import zelos_sdk
 from scapy.utils import PcapReader
 
+from zelos_extension_v2g.codec import _ts_ns
 from zelos_extension_v2g.config import (
     ConfigError,
     PacketOptions,
@@ -47,10 +48,10 @@ def test_interfaces_route_to_their_own_branch(tmp_path: Path, monkeypatch) -> No
     assert [b.name for b in branches] == ["en0", "eth0_1", "bad0"]
     with pytest.raises(ConfigError, match="Duplicate name 'eth0_1'"):
         parse_interfaces({"interfaces": [*config["interfaces"], {"interface": "eth0_1"}]}, "V2G")
-
-    import threading
-
-    import scapy.sendrecv
+    with pytest.raises(ConfigError, match="'en0' is listed twice"):
+        parse_interfaces(
+            {"interfaces": [*config["interfaces"], {"interface": "en0", "name": "b"}]}, "V2G"
+        )
 
     from zelos_extension_v2g import live
 
@@ -59,15 +60,9 @@ def test_interfaces_route_to_their_own_branch(tmp_path: Path, monkeypatch) -> No
     def fake_open(iface, promisc):
         if iface not in captures:
             raise OSError(f"Cannot set promiscuous mode on interface ({iface})!")
-        return captures[iface]
-
-    def fake_sniff(opened_socket, prn, **_):
-        with PcapReader(str(opened_socket)) as reader:
-            for pkt in reader:
-                prn(pkt)
+        return PcapReader(str(captures[iface]))  # a socket to scapy's sniffer
 
     monkeypatch.setattr(live, "open_capture", fake_open)
-    monkeypatch.setattr(scapy.sendrecv, "sniff", fake_sniff)
     out = tmp_path / "live.trz"
     ns = zelos_sdk.TraceNamespace("test")
     with zelos_sdk.TraceWriter(str(out), namespace=ns):
@@ -75,13 +70,20 @@ def test_interfaces_route_to_their_own_branch(tmp_path: Path, monkeypatch) -> No
         codecs = {
             b.interface: make_codec("V2G", b, PacketOptions(), source=source) for b in branches
         }
+        # One frame that raises must not end the capture.
+        en0, feed = codecs["en0"], codecs["en0"]._stream.feed_packet
+        calls = iter(range(10**6))
+        en0._stream.feed_packet = lambda *a: feed(*a) if next(calls) != 2 else 1 / 0
         # A refused interface is skipped; the others keep capturing.
-        assert live.sniff_into(codecs) == ["bad0"]
-        for t in threading.enumerate():
-            if t.name.startswith("v2g-"):
-                t.join()
+        sniffers, failed = live.sniff_into(codecs)
+        assert failed == ["bad0"]
+        for sniffer in sniffers:
+            sniffer.join()
         for codec in codecs.values():
             codec.flush()
+
+    assert en0.frame_errors == {"ZeroDivisionError": 1}
+    assert en0.frames == 589
 
     events = _events(out)
     assert {"*/V2G/en0/message", "*/V2G/en0/packets", "*/V2G/eth0_1/slac"} <= events.keys()
@@ -95,7 +97,7 @@ def test_convert_writes_packet_rows_in_capture_span(tmp_path: Path) -> None:
     out = tmp_path / "out.trz"
     stats = convert_capture(FIXTURE, out)
     with PcapReader(str(FIXTURE)) as reader:
-        times = [int(float(p.time) * 1e9) for p in reader]
+        times = [_ts_ns(p.time) for p in reader]
     assert stats.packets == len(times) == 589
 
     field = f"*/V2G/{FIXTURE.stem}/packets.frame_no"
@@ -110,8 +112,8 @@ def test_convert_writes_packet_rows_in_capture_span(tmp_path: Path) -> None:
     finally:
         reader.close()
     assert len({v for v in col.to_pylist() if v is not None}) == len(times)
-    # No wall-clock stats row stretches the range past the capture.
-    assert min(times) <= _ns(tr.start) and _ns(tr.end) <= max(times)
+    # Exact capture ns (no float rounding), and no wall-clock stats row stretches the range.
+    assert (_ns(tr.start), _ns(tr.end)) == (min(times), max(times))
 
 
 def test_repeated_convert_does_not_leak_schemas(tmp_path: Path) -> None:
@@ -119,3 +121,11 @@ def test_repeated_convert_does_not_leak_schemas(tmp_path: Path) -> None:
     convert_capture(SLAC_FAIL, tmp_path / "b.trz")
     paths = _events(tmp_path / "b.trz")
     assert paths and all(p.startswith(f"*/V2G/{SLAC_FAIL.stem}/") for p in paths)
+
+
+def test_only_linux_loopback_drops_outgoing() -> None:
+    from zelos_extension_v2g.live import _drops_outgoing
+
+    assert _drops_outgoing("Linux", 772)  # ARPHRD_LOOPBACK: both copies of every frame
+    assert not _drops_outgoing("Linux", 1)  # a real NIC: outgoing is this host's traffic
+    assert not _drops_outgoing("Darwin", 772)

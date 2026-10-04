@@ -82,8 +82,7 @@ def v2g_direction(
 ) -> str:
     """Label a TCP flow by V2G role using the SDP-discovered SECC endpoint.
 
-    Shared by the batch (pcap) and incremental (stream) decoders so both tag
-    direction identically. Falls back to ``"{sport}->{dport}"`` until the SECC
+    Falls back to ``"{sport}->{dport}"`` until the SECC
     endpoint is known.
     """
     secc = (secc_ip, secc_port)

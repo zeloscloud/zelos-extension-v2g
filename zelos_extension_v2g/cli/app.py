@@ -22,6 +22,7 @@ from ..config import (
     ConfigError,
     branch_name,
     check_prefix,
+    database_files,
     make_codec,
     packet_options,
     parse_interfaces,
@@ -39,12 +40,14 @@ def run_app_mode() -> None:
     try:
         prefix = check_prefix(advanced.get("prefix", DEFAULT_PREFIX))
         # A replay file replaces the interface list; its branch is the file stem.
-        branches = (
-            [Branch(branch_name(Path(replay).stem))] if replay else parse_interfaces(config, prefix)
-        )
-        dbc = advanced.get("dbc_file") or None
-        if replay and dbc and not Path(dbc).expanduser().is_file():
-            raise ConfigError(f"CAN database not found: {dbc}")
+        if replay:
+            replay = str(Path(replay).expanduser())
+            if not Path(replay).is_file():
+                raise ConfigError(f"Replay file not found: {replay}")
+            branches = [Branch(branch_name(Path(replay).stem))]
+        else:
+            branches = parse_interfaces(config, prefix)
+        dbcs = database_files(advanced.get("database_files") or []) if replay else []
     except ConfigError as e:
         logger.error("V2G configuration is invalid: %s", e)
         sys.exit(1)
@@ -66,7 +69,7 @@ def run_app_mode() -> None:
             options,
             source=shared,
             can=bool(replay),
-            dbc=dbc and str(Path(dbc).expanduser()),
+            dbcs=dbcs,
         )
         for b in branches
     }
@@ -77,15 +80,16 @@ def run_app_mode() -> None:
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
 
+    sniffers, workers = [], []
     if replay:
         (codec,) = codecs.values()
-        # Daemon: exit on SIGTERM does not wait for the replay to finish.
-        threading.Thread(
-            target=_log_errors(replay_into), args=(codec, replay, True, stop), daemon=True
-        ).start()
+        # Daemon: observes `stop`, and shutdown joins it with a bound.
+        worker = threading.Thread(target=replay_into, args=(codec, replay, True, stop), daemon=True)
+        worker.start()
+        workers.append(worker)
         logger.info("V2G replay started: %s", branches[0].name)
     elif codecs:
-        failed = sniff_into(codecs, promisc)
+        sniffers, failed = sniff_into(codecs, promisc)
         if len(failed) == len(codecs):
             logger.error("No interface could be captured (%s); stopping", ", ".join(failed))
             sys.exit(1)
@@ -94,15 +98,6 @@ def run_app_mode() -> None:
     else:
         logger.info("No interfaces configured; serving actions only")
 
-    flush_every(list(codecs.values()), stop)  # returns on SIGTERM, after a final flush
+    # Returns on SIGTERM, after stopping the captures and a final flush.
+    flush_every(list(codecs.values()), stop, sniffers=sniffers, workers=workers)
     logger.info("V2G extension stopped")
-
-
-def _log_errors(fn):
-    def run(*args):
-        try:
-            fn(*args)
-        except Exception:
-            logger.exception("V2G replay stopped on error")
-
-    return run

@@ -97,15 +97,19 @@
             "accept": ".pcap,.pcapng"
           }
         },
-        "dbc_file": {
-          "type": "string",
-          "title": "CAN Database (Replay)",
-          "description": "Decodes SocketCAN frames found in the Replay PCAP File into named signals under '<name>/CAN'. Raw CAN frames are always kept; leave empty for raw frames only. Live capture does not decode CAN (use the CAN extension).",
-          "default": "",
-          "ui:widget": "file-picker",
-          "ui:options": {
-            "accept": ".dbc,.arxml,.kcd,.sym"
-          }
+        "database_files": {
+          "type": "array",
+          "title": "CAN Databases (Replay)",
+          "description": "CAN database files (.dbc, .arxml, .kcd, .sym) that decode SocketCAN frames found in the Replay PCAP File into named signals under '<name>/CAN'. Order is precedence: a later file wins a message an earlier one defines differently. Raw CAN frames are always kept; leave empty for raw frames only. Live capture does not decode CAN (use the CAN extension).",
+          "items": {
+            "type": "string",
+            "ui:widget": "file-picker",
+            "ui:options": {
+              "accept": ".dbc,.arxml,.kcd,.sym"
+            }
+          },
+          "default": [],
+          "ui:orderable": true
         },
         "log_level": {
           "type": "string",
