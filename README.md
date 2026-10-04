@@ -44,9 +44,12 @@ Each decoded field carries its real unit (V, A, %, W, Wh) and enum value tables
 (response codes, EVSE status), so plots and queries read in engineering terms.
 
 **CAN (SocketCAN, in the same capture):**
-- **Raw frames (always):** every SocketCAN frame becomes a `CAN/Frame` row — arbitration
-  id, flags, dlc, and raw data bytes, as seen on the bus (the `candump` view).
-- **Decoded signals (with a `.dbc`):** pass `--dbc vehicle.dbc` and matching frames also
+- **Raw frames (always):** every SocketCAN frame, classic or CAN FD, becomes a `CAN/Frame`
+  row — arbitration id, flags, dlc, and raw data bytes, as seen on the bus (the `candump`
+  view). Error frames and malformed records are skipped and counted (`zelos.can.frame.v1`
+  cannot mark an error frame).
+- **Decoded signals (with a `.dbc`):** pass `--dbc vehicle.dbc` (repeatable, later files
+  win) and matching frames also
   decode into named `CAN/<id>_<message>` signal events — with units, scaling, value
   tables, and multiplexing — using the shared Rust `zelos-can` codec.
 
@@ -60,8 +63,9 @@ Each decoded field carries its real unit (V, A, %, W, Wh) and enum value tables
 zelos extensions install-local /path/to/zelos-extension-v2g
 ```
 
-No compiler or extra system packages are required — the EXI codec ships prebuilt and is
-loaded via stdlib `ctypes` (see [Architecture](#architecture)).
+No compiler is required — the EXI codec ships prebuilt and is loaded via stdlib `ctypes`
+(see [Architecture](#architecture)). Live capture on Linux needs libpcap at runtime
+(scapy compiles the capture filter with it; Debian/Ubuntu: `apt install libpcap0.8`).
 
 ## Usage
 
@@ -104,7 +108,11 @@ Standalone (no agent config): `uv run python main.py live --iface eth0` or `--re
 > `V2G/check_permissions` action opens a capture and, if refused, returns the fix
 > (macOS: `/dev/bpf` access via ChmodBPF; Linux: `setcap cap_net_raw,cap_net_admin` on
 > the extension's interpreter, or root). An interface that fails to open is logged and
-> skipped; the extension exits only if none opens.
+> skipped; the extension exits only if none opens. `V2G/check_permissions` also runs
+> while the extension is stopped, so it works when a start failed.
+>
+> On Linux loopback (`lo`) each frame is seen twice by a raw socket (outgoing and
+> incoming copy); like libpcap, the extension keeps one.
 
 ### Live from a remote bench (pipe / SSH)
 
@@ -132,15 +140,16 @@ The signals appear live in the Zelos app exactly as on the bench. Notes:
 | `interfaces[].name` | Branch name (default: the interface, catalog-sanitized). Must be unique. |
 | `advanced.prefix` | Shared source name (default `V2G`). Clear it for one source per branch. |
 | `advanced.promiscuous` | Capture third-party unicast (default on; off for drivers that refuse it). |
-| `advanced.log_packets` | Raw `zelos.packet.v1` row per frame at `<name>/packets` (default on). |
+| `advanced.log_packets` | Raw `zelos.packet.v1` rows at `<name>/packets` (default on; see below). |
 | `advanced.log_frames` | Keep frame bytes in the packet rows (default on). |
 | `advanced.stored_frame_bytes` | Cap on stored frame bytes (default null: every byte). |
 | `advanced.replay_pcap` | Replay a capture instead of the interface list; branch = file stem. |
-| `advanced.dbc_file` | CAN database for SocketCAN frames in the replay file (empty: raw frames only). |
+| `advanced.database_files` | CAN databases for SocketCAN frames in the replay file, in precedence order (later wins; empty: raw frames only). |
 | `advanced.log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR`. |
 
-Live packet rows cover what the V2G capture filter passes (IPv6 + HomePlug AV). For a full
-wire view, run the Packet extension on the same interface.
+Packet rows cover each frame of a link type the packet decoder knows, except SocketCAN
+frames (those are `CAN/Frame` rows). Live, that is only what the V2G capture filter passes
+(IPv6 + HomePlug AV); for a full wire view, run the Packet extension on the same interface.
 
 ## Trace layout
 
@@ -152,9 +161,9 @@ One branch per interface (live) or per file (replay, convert), `<name>` below:
 | `<prefix>/<name>/sdp` | SDP discovery. |
 | `<prefix>/<name>/message` | V2GTP message timeline, raw EXI per row. |
 | `<prefix>/<name>/<message>` | Decoded fields, e.g. `pre_charge_res`, `current_demand_req`. |
-| `<prefix>/<name>/packets` | Every frame as `zelos.packet.v1` (the Packet panel). |
+| `<prefix>/<name>/packets` | Captured frames as `zelos.packet.v1` (the Packet panel; scope above). |
 | `<prefix>/<name>/CAN/Frame` | SocketCAN frames in a converted, replayed or piped capture (`zelos.can.frame.v1`). |
-| `<prefix>/<name>/CAN/<id>_<message>` | DBC-decoded CAN signals (`--dbc` / `advanced.dbc_file`). |
+| `<prefix>/<name>/CAN/<id>_<message>` | DBC-decoded CAN signals (`--dbc` / `advanced.database_files`). |
 
 With the prefix cleared, `<name>` is the source and V2G events are unprefixed; the packet
 and CAN events keep their `<name>/` segment (`<name>/<name>/packets`). Logs land at
@@ -166,8 +175,8 @@ and CAN events keep their `<name>/` segment (`<name>/<name>/packets`). Logs land
 |--------|---------|
 | `V2G/auto_config` | Config with every up, non-loopback interface (standalone). |
 | `V2G/list_interfaces` | Interface choices for the config form (standalone). |
-| `V2G/convert_pcap` | Capture to `.trz`, optional DBC and packet rows (standalone). |
-| `V2G/check_permissions` | Try a capture; on refusal return the OS-specific fix. |
+| `V2G/convert_pcap` | Capture to `.trz`, optional DBCs and packet rows (standalone). |
+| `V2G/check_permissions` | Try a capture; on refusal return the OS-specific fix (standalone). |
 
 ## Architecture
 
@@ -192,6 +201,12 @@ adds the SocketCAN pcap parsing and routes frames to it.
 
 To rebuild the native shim for a platform: `bash native/build.sh` (needs `cmake`, a C
 compiler, and `git`). See [`native/README.md`](native/README.md).
+
+## Changes
+
+- **Unreleased:** events moved from `v2g/<event>` to `V2G/<name>/<event>` (one branch per
+  interface or file); `--source-name` became `--prefix` (`advanced.prefix`); the CAN
+  database setting is a list (`advanced.database_files`, `-d/--dbc` repeatable).
 
 ## Links
 
