@@ -1,10 +1,10 @@
-"""Incremental V2G stream decoder — for live capture and pcap replay.
+"""Incremental V2G decoder: the one decode path for convert, live, replay and stdin.
 
 Feeds scapy packets one at a time, maintaining per-stream TCP reassembly, and
 invokes callbacks as SLAC frames, SDP frames, and V2G application messages
-complete. Shares the per-frame parse helpers and record types with the batch
-decoder (:mod:`pcap`); the only difference is incremental, length-prefixed V2GTP
-framing instead of a whole-capture scan.
+complete. Reassembly is capture-order concatenation per 4-tuple: it assumes an
+in-order, loss-free capture (true for a bridged V2G session) and does not reorder
+by sequence number or drop retransmits.
 """
 
 from __future__ import annotations
@@ -59,18 +59,12 @@ class V2gStreamDecoder:
         self.secc_ip: str | None = None
         self.secc_port: int | None = None
 
-    @property
-    def message_count(self) -> int:
-        """Number of V2G application messages decoded so far."""
-        return self._index
-
-    def feed_packet(self, pkt) -> None:
-        ts = float(pkt.time)
+    def feed_packet(self, pkt, ts_ns: int) -> None:
         ll = link_frame(pkt)
 
         if ll is not None and ll[0] == p.ETHERTYPE_HOMEPLUG_AV:
             _, payload, src, dst = ll
-            frame = _parse_slac(ts, payload, src, dst)
+            frame = _parse_slac(ts_ns, payload, src, dst)
             if frame is not None and self.on_slac:
                 self.on_slac(frame)
             return
@@ -82,7 +76,7 @@ class V2gStreamDecoder:
             udp = pkt[UDP]
             if p.SDP_UDP_PORT in (udp.sport, udp.dport):
                 for ptype, body in _Framer().feed(bytes(udp.payload)):
-                    sdp = _parse_sdp(ts, body, ptype)
+                    sdp = _parse_sdp(ts_ns, body, ptype)
                     if sdp.kind == "response":
                         self.secc_ip, self.secc_port = sdp.secc_ip, sdp.secc_port
                     if self.on_sdp:
@@ -95,7 +89,7 @@ class V2gStreamDecoder:
             framer = self._framers.setdefault(key, _Framer())
             for ptype, body in framer.feed(data):
                 msg = V2gMessage(
-                    ts=ts,
+                    ts_ns=ts_ns,
                     index=self._index,
                     direction=self._direction(key),
                     payload_type=ptype,

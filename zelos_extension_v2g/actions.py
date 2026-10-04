@@ -21,7 +21,8 @@ from zelos_sdk.actions import ActionsRegistry, action
 
 logger = logging.getLogger(__name__)
 
-#: The running extension's interfaces and promiscuous setting; set by app mode.
+#: The running extension's interfaces and promiscuous setting; set by app mode. At rest
+#: (standalone) they keep these defaults.
 CONFIGURED_INTERFACES: list[str] = []
 PROMISCUOUS = True
 
@@ -101,6 +102,16 @@ def _remediation(system: str) -> str:
     return "Live capture is supported on Linux and macOS. Use Replay PCAP File instead."
 
 
+def _opens(iface: str, promisc: bool) -> bool:
+    from .live import open_capture
+
+    try:
+        open_capture(iface, promisc).close()
+    except Exception:  # noqa: BLE001 - any refusal is a no
+        return False
+    return True
+
+
 def _probe(iface: str, promisc: bool, known: set[str], system: str) -> dict[str, Any]:
     from .live import open_capture
 
@@ -122,7 +133,13 @@ def _probe(iface: str, promisc: bool, known: set[str], system: str) -> dict[str,
         # Linux raises PermissionError; macOS scapy reports every /dev/bpf refused.
         if isinstance(exc, PermissionError) or "No /dev/bpf handle" in str(exc):
             result["remediation"] = _remediation(system)
-        elif "promiscuous" in str(exc):
+        elif "libpcap is not available" in str(exc):
+            result["remediation"] = (
+                "Install libpcap, which compiles the capture filter "
+                "(Debian/Ubuntu: `sudo apt install libpcap0.8`), then restart the extension."
+            )
+        elif promisc and _opens(iface, promisc=False):
+            # The refusal text differs per OS; opening without promiscuous mode is the test.
             result["remediation"] = (
                 "Turn off Advanced > Promiscuous Mode for this interface's driver."
             )
@@ -133,7 +150,9 @@ def _probe(iface: str, promisc: bool, known: set[str], system: str) -> dict[str,
 @action(
     "Check Permissions",
     "Try to open a capture on each configured interface (or the one given) with the "
-    "configured promiscuous setting and, if refused, return the exact fix.",
+    "configured promiscuous setting and, if refused, return the exact fix. Also runs "
+    "when the extension is stopped or failed to start, with promiscuous mode on.",
+    standalone=True,
 )
 @action.text(
     "interface",
@@ -186,9 +205,12 @@ def check_permissions(interface: str = "") -> dict[str, Any]:
     "force", title="Overwrite existing output", required=False, default=False, widget="toggle"
 )
 @action.text(
-    "dbc_file",
-    title="CAN database (.dbc)",
-    description="Optional; decode CAN frames into named signals (raw frames are always kept)",
+    "database_files",
+    title="CAN databases (.dbc)",
+    description=(
+        "Optional; one path or several, in precedence order (a later file wins). "
+        "Decodes CAN frames into named signals; raw frames are always kept."
+    ),
     required=False,
     default="",
     widget="file_path_picker",
@@ -205,7 +227,7 @@ def convert_pcap(
     input_file: str,
     output_file: str = "",
     force: bool = False,
-    dbc_file: str = "",
+    database_files: str | list[str] = "",
     log_packets: bool = True,
 ) -> dict[str, Any]:
     """Convert one capture to .trz. Failures raise: a standalone action's exit status
@@ -216,9 +238,10 @@ def convert_pcap(
     if not source.is_file():
         raise FileNotFoundError(f"Input file not found: {source}")
     output = Path(output_file).expanduser().resolve() if output_file.strip() else None
-    dbc = Path(dbc_file).expanduser().resolve() if dbc_file.strip() else None
+    paths = [database_files] if isinstance(database_files, str) else database_files
+    dbcs = [Path(p).expanduser().resolve() for p in paths if p.strip()]
     destination = resolve_trz_output(source, output, force)
-    stats = convert_capture(source, destination, dbc=dbc, log_packets=log_packets)
+    stats = convert_capture(source, destination, dbcs=dbcs, log_packets=log_packets)
     return {
         "status": "success",
         "input_file": str(source),

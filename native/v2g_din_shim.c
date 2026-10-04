@@ -1,6 +1,7 @@
 /* Thin shim over libcbv2g: decode a DIN 70121 V2G EXI message to a compact JSON
  * object of the telemetry-relevant fields. Returns bytes written (>0) or <0 on error.
- * Pure C; built into a self-contained shared library and called via Python ctypes. */
+ * Pure C; built into a self-contained shared library and called via Python ctypes.
+ * Every field emitted per message must be listed in codec._MSG_FIELDS. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdarg.h>

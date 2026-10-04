@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import zelos_packet
@@ -55,7 +57,7 @@ def check_prefix(prefix: str) -> str:
 
 
 def parse_interfaces(config: dict[str, Any], prefix: str) -> list[Branch]:
-    """The ``interfaces`` list as branches. Duplicate names are a hard error."""
+    """The ``interfaces`` list as branches. Duplicate interfaces or names are a hard error."""
     entries = config.get("interfaces") or []
     branches: list[Branch] = []
     seen: dict[str, str] = {}
@@ -63,6 +65,8 @@ def parse_interfaces(config: dict[str, Any], prefix: str) -> list[Branch]:
         interface = str((entry or {}).get("interface") or "").strip()
         if not interface:
             raise ConfigError(f"interfaces[{i}] is missing 'interface'")
+        if interface in seen.values():
+            raise ConfigError(f"Interface {interface!r} is listed twice; list it once.")
         name = branch_name(str(entry.get("name") or "") or interface)
         if name in seen:
             raise ConfigError(
@@ -74,6 +78,15 @@ def parse_interfaces(config: dict[str, Any], prefix: str) -> list[Branch]:
         seen[name] = interface
         branches.append(Branch(name, interface))
     return branches
+
+
+def database_files(paths: Sequence[str | Path]) -> list[str]:
+    """CAN databases, ``~``-expanded, in precedence order (later wins). Missing is an error."""
+    files = [str(Path(p).expanduser()) for p in paths if str(p).strip()]
+    for f in files:
+        if not Path(f).is_file():
+            raise ConfigError(f"CAN database not found: {f}")
+    return files
 
 
 def packet_options(advanced: dict[str, Any]) -> PacketOptions:
@@ -92,13 +105,14 @@ def make_codec(
     source: zelos_sdk.TraceSource | None = None,
     namespace: zelos_sdk.TraceNamespace | None = None,
     can: bool = False,
-    dbc: str | None = None,
+    dbcs: Sequence[str] = (),
 ) -> V2gCodec:
     """A codec for ``branch`` per :func:`trace_layout`.
 
     Pass ``source`` to share one prefix source across branches: two sources under one
     name register separately and the query layer keeps only the newest. ``can`` decodes
-    SocketCAN frames found in a file (optionally with ``dbc``); live sniffs leave it off.
+    SocketCAN frames found in a file (with ``dbcs``, in precedence order); live sniffs
+    leave it off.
     """
     source_name, event_prefix = trace_layout(prefix, branch.name)
     if source is None:
@@ -112,5 +126,4 @@ def make_codec(
             log_frames=options.log_frames,
             stored_frame_bytes=options.stored_frame_bytes,
         )
-    can_name = branch.name if can else None
-    return V2gCodec(source, event_prefix, packets=packets, can_name=can_name, dbc=dbc)
+    return V2gCodec(source, branch.name, event_prefix, packets=packets, can=can, dbcs=dbcs)

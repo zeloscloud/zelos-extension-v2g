@@ -21,10 +21,13 @@ from ..config import DEFAULT_PREFIX
 @click.option(
     "-d",
     "--dbc",
+    "dbcs",
+    multiple=True,
     type=click.Path(exists=True, path_type=Path),
-    help="CAN database (.dbc) — decode CAN frames into named signals (raw frames are always kept)",
+    help="CAN database (.dbc), repeatable in precedence order (a later file wins). "
+    "Decodes CAN frames into named signals; raw frames are always kept",
 )
-def decode(prefix: str, name: str, dbc: Path | None) -> None:
+def decode(prefix: str, name: str, dbcs: tuple[Path, ...]) -> None:
     """Decode a pcap stream piped on **stdin** into the live Zelos app.
 
     The network analog of `candump | cantools decode`: pipe a capture tool's pcap
@@ -44,4 +47,4 @@ def decode(prefix: str, name: str, dbc: Path | None) -> None:
         )
     from ..live import run_decode
 
-    run_decode(prefix=prefix, name=name, dbc=str(dbc) if dbc else None)
+    run_decode(prefix=prefix, name=name, dbcs=tuple(str(p) for p in dbcs))
