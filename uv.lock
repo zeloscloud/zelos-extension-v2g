@@ -596,8 +596,7 @@ requires-dist = [
     { name = "rich-click", specifier = ">=1.8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.2" },
     { name = "scapy", specifier = ">=2.5.0" },
-    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.3.0" },
-    { name = "zelos-can", specifier = ">=0.0.10" },
+    { name = "zelos-can", specifier = ">=0.0.10,<0.1" },
     { name = "zelos-packet", specifier = ">=0.0.2,<0.1" },
     { name = "zelos-sdk", specifier = ">=0.0.12a1" },
 ]
