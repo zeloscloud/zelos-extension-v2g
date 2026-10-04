@@ -23,7 +23,7 @@ and degrades gracefully (Layer-1 framing only) if none is present for the platfo
 
 ```bash
 ./native/build.sh                 # builds for the current platform
-LIBCBV2G_REF=<tag> ./native/build.sh   # pin a libcbv2g release
+LIBCBV2G_REF=<tag|commit> ./native/build.sh   # default: the pinned v0.3.2 commit
 ```
 
 Run on each platform Zelos targets (e.g. macOS arm64, Linux x86_64) and commit the
