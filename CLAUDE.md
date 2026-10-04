@@ -9,16 +9,16 @@ both CAN and V2G converts to one time-aligned `.trz`.
 | Path | Role |
 |------|------|
 | `protocol.py` | Wire constants + SLAC MMTYPE table. |
-| `pcap.py` | scapy offline reader → SLAC/SDP/V2GTP records (`decode_session`); `link_frame` (Ethernet + Linux cooked SLL). |
-| `stream.py` | Incremental V2GTP framer for the live/stdin path (`V2gStreamDecoder`). |
+| `pcap.py` | SLAC/SDP/V2GTP record types + per-frame parse helpers; `link_frame` (Ethernet + Linux cooked SLL). |
+| `stream.py` | `V2gStreamDecoder`: incremental TCP reassembly + V2GTP framing, the one decode path. |
 | `slac.py` | Per-frame SLAC field decode (attenuation, match). |
-| `codec.py` | `V2gCodec`: one branch; `feed(pkt)` → packet row + V2G events; `trace_layout`. |
-| `config.py` | Config parsing (`interfaces[]`, `advanced`), `branch_name`, `make_codec`. |
-| `actions.py` | `V2G/` actions: `auto_config`, `list_interfaces`, `convert_pcap` (standalone), `check_permissions`. |
-| `socketcan.py` | Parse `LINKTYPE_CAN_SOCKETCAN` (227) records → `CanFrame`. |
+| `codec.py` | `V2gCodec`: one branch; `feed(pkt)` → packet row + V2G events; `trace_layout`; `_MSG_FIELDS`. |
+| `config.py` | Config parsing (`interfaces[]`, `advanced`), `branch_name`, `database_files`, `make_codec`. |
+| `actions.py` | `V2G/` actions, all standalone: `auto_config`, `list_interfaces`, `convert_pcap`, `check_permissions`. |
+| `socketcan.py` | Parse `LINKTYPE_CAN_SOCKETCAN` (227) records (classic 16 B, FD 72 B) → `CanFrame`. |
 | `can_ingest.py` | Glue to `zelos_can.CanDecoder` (raw + DBC decode lives in `zelos-can`). |
-| `converter.py` | `convert_capture(in, out, dbc=, prefix=, log_packets=)` — any capture → `.trz`. |
-| `live.py` | `sniff_into` (one socket + thread per interface; failures skipped), `replay_into`, `decode_stream_into`. |
+| `converter.py` | `convert_capture(in, out, dbcs, prefix=, log_packets=)` — any capture → `.trz`. |
+| `live.py` | `sniff_into` (one `AsyncSniffer` per interface; failures skipped), `replay_into`, `decode_stream_into`, `flush_every`. |
 | `cli/` | `app.py` (agent app-mode), `convert.py`, `live.py`, `decode.py`. |
 | `exi/libv2g.py`, `exi/_lib/` | ctypes binding + prebuilt libcbv2g shim (one per platform). |
 | `native/` | The C shim (`v2g_din_shim.c`) + build scripts. |
@@ -40,7 +40,15 @@ across frames** — no session summaries, health roll-ups, or inferred/default v
 All ingest paths share one decode, `V2gCodec.feed(pkt)`: offline `convert_capture`, live
 (`sniff_into`), replay (`replay_into`), and stdin (`decode_stream_into` / the `decode`
 subcommand — `tcpdump -w - | … decode`). Replay/stdin re-stamp `pkt.time` before the feed, so
-V2G events and packet rows share one timestamp.
+V2G events and packet rows share one timestamp: `int(pkt.time * 10**9)` on scapy's Decimal,
+exact to the ns, for V2G, packet and CAN rows alike.
+
+`feed` never raises: a frame that fails is logged once per exception type (with its frame
+number) and counted in `frame_errors` (logged at stop, in convert stats). Without that guard,
+an exception inside scapy's `sniff(prn=...)` closes the socket and that capture silently dies.
+Shutdown order matters: stop sniffers / join workers, then the final flush (`flush_every`).
+On Linux loopback, `open_capture` uses `L2socket`, which drops the `PACKET_OUTGOING` copy
+(`L2listen` keeps both, so `lo` would double every row); real NICs keep outgoing frames.
 `link_frame` makes it link-layer-agnostic (Ethernet + Linux cooked SLL), so `-i eth0` and
 `-i any` both decode.
 
@@ -54,11 +62,14 @@ linked into one shared lib **prebuilt per platform and committed** under
 `exi/_lib/libv2gshim-<os>-<arch>.{dylib,so}`, loaded via stdlib `ctypes`. **No compiler runs at
 install; nothing is published to PyPI** — keep it that way.
 
-- **Shim ↔ codec contract:** every field the shim emits must appear in `codec._FIELD_META`
-  (field → DataType + unit) or it is silently dropped. Widen both together.
+- **Shim ↔ codec contract:** every field the shim can emit for a message must be listed under
+  it in `codec._MSG_FIELDS` (the event schema is registered whole, since optional fields are
+  emitted only when present) and typed in `_FIELD_META` (XSD widths), or it is dropped.
+  `test_msg_fields_cover_shim` diffs the table against the C source.
 - **Rebuild:** `bash native/build.sh` (needs `cmake`, a C compiler, `git`; position-independent
   code is required on x86_64). `bash native/build-linux.sh` cross-builds the Linux `.so`s in
-  manylinux containers. Commit the rebuilt artifacts.
+  manylinux containers. Commit the rebuilt artifacts. `LIBCBV2G_REF` pins the libcbv2g commit
+  (v0.3.2); `exi/_lib/LICENSE-libcbv2g` ships its Apache-2.0 licence, keep its version in step.
 
 ## Trace layout
 
@@ -76,7 +87,8 @@ pushes a stats row stamped wall-clock now, stretching the trace's time range to 
 
 ## CAN-in-pcap
 
-`convert_capture` reads a capture once and dispatches per frame: no `link_frame` → SocketCAN →
+`convert_capture` reads a capture once and dispatches per frame on the link type: DLT 227
+records (scapy's `CAN` / `CANFD`, registered by importing `scapy.layers.can`) →
 `zelos_can.CanDecoder`; anything else → the file's `V2gCodec`. The CAN decoder writes into that
 codec's source, under `<name>/CAN/Frame` (raw, `zelos.can.frame.v1`) and `<name>/CAN/<id>_<msg>`
 (with a DBC), so a combined capture is one time-aligned branch. It is created on the first
@@ -85,9 +97,12 @@ SocketCAN frame, so V2G-only captures get no CAN tables. The split lives in `V2g
 Each convert uses a fresh `TraceNamespace`, so repeated action runs leak no schemas.
 
 **CAN decode is not reimplemented here** — raw + DBC frame cracking lives in the `zelos-can`
-dependency; `can_ingest.py` is only glue, and `socketcan.py` hand-parses the 16-byte classic
-frame (id/flags big-endian: bit31 EFF / bit30 RTR / bit29 ERR; byte 4 = dlc ≤ 8) because scapy
-has no linktype-227 dissector. Two `CanDecoder` gotchas:
+dependency; `can_ingest.py` is only glue, and `socketcan.py` hand-parses the record bytes
+(id/flags big-endian: bit31 EFF / bit30 RTR / bit29 ERR; byte 4 = length; 16 B classic, 72 B
+FD → `is_fd=True`) rather than scapy's CAN fields, whose byte order is a global scapy setting. Error
+frames are skipped and counted (`zelos.can.frame.v1` has no error flag), as are malformed
+records. DBCs are a list (`advanced.database_files`, `-d` repeatable), later wins, like the CAN
+extension. Two `CanDecoder` gotchas:
 
 1. The DBC is optional; pass `log_raw_frames=True` so raw frames are kept even when a DBC is
    decoding signals.
