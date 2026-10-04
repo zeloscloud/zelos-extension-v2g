@@ -8,7 +8,9 @@
 set -euo pipefail
 
 LIBCBV2G_URL="https://github.com/EVerest/libcbv2g"
-LIBCBV2G_REF="${LIBCBV2G_REF:-main}"   # override to pin a tag/commit
+# v0.3.2: the commit the committed exi/_lib artifacts were built from. Override with a
+# tag or commit; bump LICENSE-libcbv2g's version line with it.
+LIBCBV2G_REF="${LIBCBV2G_REF:-03350be048b35b179905129005a97144a4bdcf93}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT_DIR="$HERE/../zelos_extension_v2g/exi/_lib"
@@ -16,9 +18,12 @@ WORK="$HERE/.build"
 mkdir -p "$WORK" "$OUT_DIR"
 
 # 1. Fetch + build libcbv2g (Apache-2.0) static libraries.
-if [ ! -d "$WORK/libcbv2g" ]; then
-    git clone --depth 1 --branch "$LIBCBV2G_REF" "$LIBCBV2G_URL" "$WORK/libcbv2g" 2>/dev/null \
-        || git clone --depth 1 "$LIBCBV2G_URL" "$WORK/libcbv2g"
+# Fetch by ref so a commit pins as well as a tag; a stale checkout is replaced.
+if [ "$(git -C "$WORK/libcbv2g" rev-parse HEAD 2>/dev/null)" != "$LIBCBV2G_REF" ]; then
+    rm -rf "$WORK/libcbv2g"
+    git init -q "$WORK/libcbv2g"
+    git -C "$WORK/libcbv2g" fetch -q --depth 1 "$LIBCBV2G_URL" "$LIBCBV2G_REF"
+    git -C "$WORK/libcbv2g" checkout -q FETCH_HEAD
 fi
 # -DCMAKE_POSITION_INDEPENDENT_CODE=ON is required: we link these static libs into a
 # shared object, and on x86_64 non-PIC static code fails with "relocation R_X86_64_32S
