@@ -6,12 +6,14 @@ from pathlib import Path
 
 import rich_click as click
 
+from ..config import DEFAULT_PREFIX
+
 
 @click.command()
 @click.option(
     "--iface",
     default=None,
-    help="Interface to sniff for live capture (needs root + a bridged PLC/green-PHY link)",
+    help="Interface(s) to sniff, comma-separated (needs capture rights + a bridged green-PHY link)",
 )
 @click.option(
     "--replay",
@@ -19,8 +21,13 @@ import rich_click as click
     default=None,
     help="Replay a pcap/pcapng as a live stream (same code path; for testing/demo)",
 )
-@click.option("--source-name", default="v2g", help="Trace source name")
-def live(iface: str | None, replay: Path | None, source_name: str) -> None:
+@click.option(
+    "--prefix",
+    default=DEFAULT_PREFIX,
+    show_default=True,
+    help="Leading trace-source name; pass '' to give each interface its own source",
+)
+def live(iface: str | None, replay: Path | None, prefix: str) -> None:
     """Stream live V2G telemetry into the Zelos app.
 
     Examples:
@@ -33,4 +40,4 @@ def live(iface: str | None, replay: Path | None, source_name: str) -> None:
         raise click.UsageError("provide --iface (live capture) or --replay <pcap> (testing)")
     from ..live import run_live
 
-    run_live(iface=iface, replay=str(replay) if replay else None, source_name=source_name)
+    run_live(iface=iface, replay=str(replay) if replay else None, prefix=prefix)

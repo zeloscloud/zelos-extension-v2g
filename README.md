@@ -11,8 +11,8 @@ with other signals, query from the CLI, and share as a `.trz`.
 
 It also decodes **CAN** frames captured alongside V2G (Wireshark/tcpdump on a SocketCAN
 interface). A capture carrying **both** — e.g. a bench recording of a charging session
-next to the vehicle bus — converts to **one time-aligned `.trz`** with `can*/*` and
-`v2g/*` on the same clock, so you can correlate the CAN bus with the charging handshake.
+next to the vehicle bus — converts to **one time-aligned `.trz`**, CAN beside the V2G events
+on the same clock, so you can correlate the CAN bus with the charging handshake.
 
 ## What it decodes
 
@@ -40,14 +40,28 @@ does not synthesize cross-frame "session health" summaries or roll-ups.
 - **supportedAppProtocol (SAP)** handshake — the negotiated protocol and version, which
   also sets the session's dialect authoritatively.
 
-Each decoded field carries its real unit (V, A, %, W, Wh) and enum value tables
-(response codes, EVSE status), so plots and queries read in engineering terms.
+| Fields | On |
+|--------|----|
+| `session_id`, `protocol` | Every DIN / ISO-2 message (header SessionID, hex). |
+| `soc`, `ev_ready`, `ev_error_code`, `ev_cabin_conditioning`, `ev_ress_conditioning` (DIN) | Requests carrying DC_EVStatus. |
+| `evse_status_code`, `evse_isolation_status`, `evse_notification`, `notification_max_delay` | Responses carrying DC_EVSEStatus. |
+| `ev_max_voltage/current/power`, `ev_target_*`, `charging_complete`, `bulk_charging_complete`, `remaining_time_to_full_soc/bulk_soc` | ChargeParameterDiscoveryReq, PreChargeReq, CurrentDemandReq. |
+| `evse_max_*`, `evse_min_voltage/current`, `evse_peak_current_ripple`, `evse_current_regulation_tolerance`, `evse_energy_to_be_delivered`, `evse_present_*`, `evse_*_limit_achieved` | ChargeParameterDiscoveryRes, PreChargeRes, CurrentDemandRes. |
+| `ready_to_charge` (DIN), `charge_progress` (ISO-2), `charging_session` (ISO-2) | PowerDeliveryReq, SessionStopReq. |
+| `payment_options`, `energy_transfer_modes` (comma-separated XSD names), `selected_payment_option`, `requested_energy_transfer` | ServiceDiscoveryRes, payment selection, ChargeParameterDiscoveryReq. |
+
+Each decoded field carries its real unit (V, A, %, W, Wh, s) and enum value tables
+(response codes, EVSE status, isolation, notification, error codes), so plots and queries
+read in engineering terms. An optional element the message omits is a null cell, never 0.
 
 **CAN (SocketCAN, in the same capture):**
-- **Raw frames (always):** every SocketCAN frame becomes a `can_raw/*` row — arbitration
-  id, flags, dlc, and raw data bytes, as seen on the bus (the `candump` view).
-- **Decoded signals (with a `.dbc`):** pass `--dbc vehicle.dbc` and matching frames also
-  decode into named `can_codec/<id>_<message>` signal events — with units, scaling, value
+- **Raw frames (always):** every SocketCAN frame, classic or CAN FD, becomes a `CAN/Frame`
+  row — arbitration id, flags, dlc, and raw data bytes, as seen on the bus (the `candump`
+  view). Error frames and malformed records are skipped and counted (`zelos.can.frame.v1`
+  cannot mark an error frame).
+- **Decoded signals (with a `.dbc`):** pass `--dbc vehicle.dbc` (repeatable, later files
+  win) and matching frames also
+  decode into named `CAN/<id>_<message>` signal events — with units, scaling, value
   tables, and multiplexing — using the shared Rust `zelos-can` codec.
 
 > Not yet wired (the codec supports them; deferred until needed): ISO 15118-20, and
@@ -60,8 +74,9 @@ Each decoded field carries its real unit (V, A, %, W, Wh) and enum value tables
 zelos extensions install-local /path/to/zelos-extension-v2g
 ```
 
-No compiler or extra system packages are required — the EXI codec ships prebuilt and is
-loaded via stdlib `ctypes` (see [Architecture](#architecture)).
+No compiler is required — the EXI codec ships prebuilt and is loaded via stdlib `ctypes`
+(see [Architecture](#architecture)). Live capture on Linux needs libpcap at runtime
+(scapy compiles the capture filter with it; Debian/Ubuntu: `apt install libpcap0.8`).
 
 ## Usage
 
@@ -76,7 +91,7 @@ uv run python main.py convert session.pcapng -o session.trz
 uv run python main.py convert tests/files/combined_can_v2g.pcapng \
   --dbc tests/files/example.dbc -o session.trz
 
-# or as an agent action: "Convert Pcap"
+# or the V2G/convert_pcap action (runs without the extension started)
 ```
 
 Accepts `.pcap` and `.pcapng`. A capture with both CAN and V2G produces one time-aligned
@@ -84,27 +99,32 @@ trace. Open the resulting `.trz` in the Zelos app, or query it:
 
 ```bash
 zelos trace signals session.trz                 # list decoded signals
-zelos trace query  session.trz -s '*/v2g/current_demand_res.evse_present_voltage'
+zelos trace query  session.trz -s '*/V2G/session/current_demand_res.evse_present_voltage'
 ```
 
 ### Live capture
 
-Configure the extension with an `interface` to sniff a bridged green-PHY link, or a
-`replay_pcap` to stream a capture through the live path (handy for testing without
-hardware). Decoded signals stream to the agent in real time:
+Add one `interfaces[]` entry per bridged green-PHY interface (Auto-configure fills in
+every interface that is up), or set `advanced.replay_pcap` to stream a capture through
+the live path without hardware. Decoded signals stream to the agent in real time:
 
 ```bash
-zelos extensions start local.zelos-extension-v2g \
-  --config '{"interface": "eth0", "source_name": "v2g"}'
-
-zelos live signals
-zelos live query -s '*/v2g/current_demand_req.ev_target_current' --last 30s
+zelos live events
+zelos live query -s '*/V2G/eth0/current_demand_req.ev_target_current' --last 30s
 ```
 
-Standalone (no agent): `uv run python main.py live --iface eth0` or `--replay file.pcap`.
+Standalone (no agent config): `uv run python main.py live --iface eth0` or `--replay file.pcap`.
 
-> Live capture needs raw-socket permission. On a permissioned Linux deploy `interface=`
-> works directly; on macOS the agent runs non-root, so use `replay_pcap` there.
+> Live capture needs raw-socket rights on the agent's machine. The
+> `V2G/check_permissions` action opens a capture and, if refused, returns the fix
+> (macOS: `/dev/bpf` access via ChmodBPF; Linux: `AmbientCapabilities=CAP_NET_RAW` on
+> the agent's systemd unit, or root; or, broader, `setcap cap_net_raw=eip` on the
+> interpreter, which covers every program it runs and is lost on its upgrade). An interface that fails to open is logged and
+> skipped; the extension exits only if none opens. `V2G/check_permissions` also runs
+> while the extension is stopped, so it works when a start failed.
+>
+> On Linux loopback (`lo`) each frame is seen twice by a raw socket (outgoing and
+> incoming copy); like libpcap, the extension keeps one.
 
 ### Live from a remote bench (pipe / SSH)
 
@@ -126,12 +146,50 @@ The signals appear live in the Zelos app exactly as on the bench. Notes:
 
 ## Configuration
 
-| Field         | Purpose                                                            |
-|---------------|-------------------------------------------------------------------|
-| `interface`   | Network interface(s) to sniff live (comma-separated for several). |
-| `replay_pcap` | A pcap/pcapng to replay through the live path instead of sniffing.|
-| `source_name` | Trace source name (default `v2g`).                                |
-| `log_level`   | `DEBUG` / `INFO` / `WARNING` / `ERROR`.                           |
+| Field | Purpose |
+|-------|---------|
+| `interfaces[].interface` | Interface to capture (picked from `V2G/list_interfaces`). |
+| `interfaces[].name` | Branch name (default: the interface, catalog-sanitized). Must be unique. |
+| `advanced.prefix` | Shared source name (default `V2G`). Clear it for one source per branch. |
+| `advanced.promiscuous` | Capture third-party unicast (default on; off for drivers that refuse it). |
+| `advanced.log_packets` | Raw `zelos.packet.v1` rows at `<name>/packets` (default on; see below). |
+| `advanced.log_frames` | Keep frame bytes in the packet rows (default on). |
+| `advanced.stored_frame_bytes` | Cap on stored frame bytes (default null: every byte). |
+| `advanced.replay_pcap` | Replay a capture instead of the interface list; branch = file stem. |
+| `advanced.database_files` | CAN databases for SocketCAN frames in the replay file, in precedence order (later wins; empty: raw frames only). |
+| `advanced.log_level` | `DEBUG` / `INFO` / `WARNING` / `ERROR`. |
+
+Packet rows cover each frame of a link type the packet decoder knows, except SocketCAN
+frames (those are `CAN/Frame` rows). Live, that is only what the V2G capture filter passes
+(IPv6 + HomePlug AV); for a full wire view, run the Packet extension on the same interface.
+
+## Trace layout
+
+One branch per interface (live) or per file (replay, convert), `<name>` below:
+
+| Event | Contents |
+|-------|----------|
+| `<prefix>/<name>/slac`, `slac_attenuation`, `slac_match` | SLAC frames and their per-frame decode. |
+| `<prefix>/<name>/sdp` | SDP discovery. |
+| `<prefix>/<name>/message` | V2GTP message timeline, raw EXI per row. |
+| `<prefix>/<name>/<message>` | Decoded fields, e.g. `pre_charge_res`, `current_demand_req`. |
+| `<prefix>/<name>/packets` | Captured frames as `zelos.packet.v1` (the Packet panel; scope above). |
+| `<prefix>/<name>/CAN/Frame` | SocketCAN frames in a converted, replayed or piped capture (`zelos.can.frame.v1`). |
+| `<prefix>/<name>/CAN/<id>_<message>` | DBC-decoded CAN signals (`--dbc` / `advanced.database_files`). |
+
+With the prefix cleared, `<name>` is the source and V2G and CAN events are unprefixed.
+The one exception is packet rows, which keep their `<name>/` segment
+(`<name>/<name>/packets`, [#9](https://github.com/zeloscloud/zelos-extension-v2g/issues/9)). Logs land at
+`<prefix>/log` (`v2g_log/log` when cleared).
+
+## Actions
+
+| Action | Purpose |
+|--------|---------|
+| `V2G/auto_config` | Config with every up, non-loopback interface (standalone). |
+| `V2G/list_interfaces` | Interface choices for the config form (standalone). |
+| `V2G/convert_pcap` | Capture to `.trz`, optional DBCs and packet rows (standalone). |
+| `V2G/check_permissions` | Try a capture; on refusal return the OS-specific fix (standalone). |
 
 ## Architecture
 
@@ -156,6 +214,12 @@ adds the SocketCAN pcap parsing and routes frames to it.
 
 To rebuild the native shim for a platform: `bash native/build.sh` (needs `cmake`, a C
 compiler, and `git`). See [`native/README.md`](native/README.md).
+
+## Changes
+
+- **Unreleased:** events moved from `v2g/<event>` to `V2G/<name>/<event>` (one branch per
+  interface or file); `--source-name` became `--prefix` (`advanced.prefix`); the CAN
+  database setting is a list (`advanced.database_files`, `-d/--dbc` repeatable).
 
 ## Links
 

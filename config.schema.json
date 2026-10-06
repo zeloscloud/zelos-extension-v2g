@@ -1,34 +1,129 @@
 {
   "$comment": "Configuration UI for the Zelos App. See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/#configuration",
   "type": "object",
-  "title": "V2G",
-  "description": "ISO 15118 / DIN 70121 V2G decode. Leave the capture fields empty for converter-only (use the Convert Pcap action); set an interface to capture live.",
+  "additionalProperties": false,
+  "title": "V2G Configuration",
+  "description": "Pick the interfaces carrying the EV-charger link (a bridged green-PHY / CCS adapter), save, then start. Everything else is under Advanced. Live capture needs capture rights on the machine running the agent; run the Check Permissions action if a start fails. Replaying or converting a pcap needs no privileges.",
+  "ui:options": {
+    "autoconfig": "V2G/auto_config"
+  },
   "properties": {
-    "interface": {
-      "type": "string",
-      "title": "Live capture interface(s)",
-      "description": "Network interface to sniff for live V2G capture (a bridged green-PHY / CCS link). Comma-separate for multiple. Requires capture privileges. Leave empty for converter-only.",
-      "default": "",
-      "ui:placeholder": "e.g. eth0  (or  eth0,eth1)"
+    "interfaces": {
+      "type": "array",
+      "title": "Interfaces",
+      "description": "Interfaces to capture from, in parallel. Each one decodes into its own branch of the signal tree. Leave empty when using Replay PCAP File, or to only run the Convert Pcap action.",
+      "items": {
+        "title": "Interface",
+        "type": "object",
+        "properties": {
+          "interface": {
+            "type": "string",
+            "title": "Interface",
+            "description": "Network interface to capture on. Choose from the machine running the agent, or type a name.",
+            "ui:widget": "action-choices",
+            "ui:placeholder": "eth0",
+            "ui:options": {
+              "action": "V2G/list_interfaces"
+            }
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Names this interface's branch in the signal tree. Defaults to the interface name. Dots, colons, '@' and '/' become '_' because they are catalog path separators. Each name must be unique.",
+            "ui:placeholder": "defaults to the interface name"
+          }
+        },
+        "required": [
+          "interface"
+        ]
+      },
+      "default": []
     },
-    "replay_pcap": {
-      "type": "string",
-      "title": "Replay pcap (testing)",
-      "description": "Replay a pcap/pcapng as a live stream instead of sniffing an interface (same decode path; for testing without hardware).",
-      "default": "",
-      "ui:widget": "file-picker"
-    },
-    "source_name": {
-      "type": "string",
-      "title": "Trace source name",
-      "description": "Name of the trace source the decoded V2G signals are published under.",
-      "default": "v2g"
-    },
-    "log_level": {
-      "type": "string",
-      "title": "Log Level",
-      "enum": ["DEBUG", "INFO", "WARNING", "ERROR"],
-      "default": "INFO"
+    "advanced": {
+      "type": "object",
+      "title": "Advanced",
+      "description": "Settings that apply to every interface. The defaults suit most captures.",
+      "ui:options": {
+        "collapsed": true
+      },
+      "additionalProperties": false,
+      "default": {},
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "title": "Prefix",
+          "description": "Leading trace source every interface publishes under, so events read '<prefix>/<name>/<event>'. Clear it to give each interface its own trace source with unprefixed events.",
+          "default": "V2G",
+          "ui:placeholder": "V2G",
+          "ui:emptyValue": ""
+        },
+        "promiscuous": {
+          "type": "boolean",
+          "title": "Promiscuous Mode",
+          "description": "Capture every frame on the link, not just frames addressed to this host. V2G sniffing usually observes EV-charger unicast from a third host (a tap, bridge or PLC modem), which only promiscuous mode sees. Turn it off on interfaces or drivers that refuse it (many Wi-Fi adapters do).",
+          "default": true,
+          "ui:widget": "toggle"
+        },
+        "log_packets": {
+          "type": "boolean",
+          "title": "Log Packets",
+          "description": "Also write every captured frame as a packet row at '<name>/packets' (addresses, ports, protocol, and a summary such as HomePlug AV, SDP or V2GTP), shown by the app's Packet panel.",
+          "default": true,
+          "ui:widget": "toggle"
+        },
+        "log_frames": {
+          "type": "boolean",
+          "title": "Log Raw Frames",
+          "description": "Populate the packet rows' 'frame' Binary column with the captured bytes (up to Frame Bytes Stored). Turn it off to keep only decoded header fields, which makes traces far smaller.",
+          "default": true,
+          "ui:widget": "toggle"
+        },
+        "stored_frame_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "title": "Frame Bytes Stored",
+          "description": "Bytes of each captured packet kept in the 'frame' column. A storage limit, not a capture limit: the decoded columns are the same whatever this is set to. null (the default) stores every captured byte. Set a number to store only a prefix and shrink traces.",
+          "default": null,
+          "minimum": 1
+        },
+        "replay_pcap": {
+          "type": "string",
+          "title": "Replay PCAP File",
+          "description": "Decode a .pcap/.pcapng as a live stream instead of capturing, at the capture's original pace with timestamps shifted to start now. Needs no privileges. When set, the Interfaces list is ignored and the branch is named after the file.",
+          "ui:widget": "file-picker",
+          "ui:options": {
+            "accept": ".pcap,.pcapng"
+          }
+        },
+        "database_files": {
+          "type": "array",
+          "title": "CAN Databases (Replay)",
+          "description": "CAN database files (.dbc, .arxml, .kcd, .sym) that decode SocketCAN frames found in the Replay PCAP File into named signals under '<name>/CAN'. Order is precedence: a later file wins a message an earlier one defines differently. Raw CAN frames are always kept; leave empty for raw frames only. Live capture does not decode CAN (use the CAN extension).",
+          "items": {
+            "type": "string",
+            "ui:widget": "file-picker",
+            "ui:options": {
+              "accept": ".dbc,.arxml,.kcd,.sym"
+            }
+          },
+          "default": [],
+          "ui:orderable": true
+        },
+        "log_level": {
+          "type": "string",
+          "title": "Log Level",
+          "description": "Logging verbosity for the extension.",
+          "enum": [
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR"
+          ],
+          "default": "INFO"
+        }
+      }
     }
   }
 }

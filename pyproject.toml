@@ -12,23 +12,23 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    # >= 0.0.10a5: TraceWriter.close() force-flushes buffered events, so the converter
-    # needs no post-write settle. Earlier stable (0.0.9) drops rows on fast conversions.
-    "zelos-sdk>=0.0.10a5",
+    # >= 0.0.12a1: the ABI zelos-packet binds to. A prerelease floor on a direct
+    # dependency is what lets uv resolve it.
+    "zelos-sdk>=0.0.12a1",
     "rich-click>=1.8.0",
     "scapy>=2.5.0",
-    # Shared Rust CAN codec (raw + DBC frame cracking) — used for SocketCAN frames
-    # found in a capture. Prebuilt wheel, no build step. >= 0.0.7a0: optional DBC
-    # (raw-only decode with no database) + macOS/Windows wheels. NOTE: until those
-    # wheels are on PyPI, local dev installs a locally-built wheel (see CLAUDE.md).
-    "zelos-can>=0.0.7a0",
+    # Shared Rust CAN codec (raw + DBC frame cracking) for SocketCAN frames found
+    # in a capture. >= 0.0.10: event_prefix / raw_event_name nesting, typed
+    # zelos.can.frame.v1 rows, and the CAN extension's decode-parity fixes.
+    "zelos-can>=0.0.10,<0.1",
+    # Shared Rust packet dissector: the per-interface `<name>/packets` rows.
+    "zelos-packet>=0.0.2,<0.1",
 ]
 
 [project.scripts]
@@ -45,7 +45,6 @@ dev = [
     "pytest>=8.4.2",
     "pre-commit>=4.3.0",
     "ruff>=0.14.2",
-    "tomli>=2.3.0; python_version < '3.11'",
 ]
 
 [build-system]
