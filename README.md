@@ -40,8 +40,19 @@ does not synthesize cross-frame "session health" summaries or roll-ups.
 - **supportedAppProtocol (SAP)** handshake — the negotiated protocol and version, which
   also sets the session's dialect authoritatively.
 
-Each decoded field carries its real unit (V, A, %, W, Wh) and enum value tables
-(response codes, EVSE status), so plots and queries read in engineering terms.
+| Fields | On |
+|--------|----|
+| `session_id`, `protocol` | Every DIN / ISO-2 message (header SessionID, hex). |
+| `soc`, `ev_ready`, `ev_error_code`, `ev_cabin_conditioning`, `ev_ress_conditioning` (DIN) | Requests carrying DC_EVStatus. |
+| `evse_status_code`, `evse_isolation_status`, `evse_notification`, `notification_max_delay` | Responses carrying DC_EVSEStatus. |
+| `ev_max_voltage/current/power`, `ev_target_*`, `charging_complete`, `bulk_charging_complete`, `remaining_time_to_full_soc/bulk_soc` | ChargeParameterDiscoveryReq, PreChargeReq, CurrentDemandReq. |
+| `evse_max_*`, `evse_min_voltage/current`, `evse_peak_current_ripple`, `evse_current_regulation_tolerance`, `evse_energy_to_be_delivered`, `evse_present_*`, `evse_*_limit_achieved` | ChargeParameterDiscoveryRes, PreChargeRes, CurrentDemandRes. |
+| `ready_to_charge` (DIN), `charge_progress` (ISO-2), `charging_session` (ISO-2) | PowerDeliveryReq, SessionStopReq. |
+| `payment_options`, `energy_transfer_modes` (comma-separated XSD names), `selected_payment_option`, `requested_energy_transfer` | ServiceDiscoveryRes, payment selection, ChargeParameterDiscoveryReq. |
+
+Each decoded field carries its real unit (V, A, %, W, Wh, s) and enum value tables
+(response codes, EVSE status, isolation, notification, error codes), so plots and queries
+read in engineering terms. An optional element the message omits is a null cell, never 0.
 
 **CAN (SocketCAN, in the same capture):**
 - **Raw frames (always):** every SocketCAN frame, classic or CAN FD, becomes a `CAN/Frame`
