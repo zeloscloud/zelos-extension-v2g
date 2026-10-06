@@ -98,6 +98,27 @@ ENERGY_TRANSFER = [
     "DC_combo_core",
     "DC_unique",
 ]
+EV_ERROR_CODE = [
+    "NO_ERROR",
+    "FAILED_RESSTemperatureInhibit",
+    "FAILED_EVShiftPosition",
+    "FAILED_ChargerConnectorLockFault",
+    "FAILED_EVRESSMalfunction",
+    "FAILED_ChargingCurrentdifferential",
+    "FAILED_ChargingVoltageOutOfRange",
+    "Reserved_A",
+    "Reserved_B",
+    "Reserved_C",
+    "FAILED_ChargingSystemIncompatibility",
+    "NoData",
+]
+# DIN defines 0-3; ISO 15118-2 adds No_IMD.
+ISOLATION_LEVEL = ["Invalid", "Valid", "Warning", "Fault", "No_IMD"]
+EVSE_NOTIFICATION = ["None", "StopCharging", "ReNegotiation"]
+PAYMENT_OPTION = ["Contract", "ExternalPayment"]
+# ISO 15118-2 only (DIN PowerDeliveryReq has the boolean ReadyToChargeState).
+CHARGE_PROGRESS = ["Start", "Stop", "Renegotiate"]
+CHARGING_SESSION = ["Terminate", "Pause"]
 
 # supportedAppProtocol has its own response codes.
 _SAP_RESPONSE_CODE = dict(
@@ -116,23 +137,43 @@ _VALUE_TABLES = {
     "evse_status_code": dict(enumerate(EVSE_STATUS_CODE)),
     "evse_processing": dict(enumerate(EVSE_PROCESSING)),
     "requested_energy_transfer": dict(enumerate(ENERGY_TRANSFER)),
+    "ev_error_code": dict(enumerate(EV_ERROR_CODE)),
+    "evse_isolation_status": dict(enumerate(ISOLATION_LEVEL)),
+    "evse_notification": dict(enumerate(EVSE_NOTIFICATION)),
+    "selected_payment_option": dict(enumerate(PAYMENT_OPTION)),
+    "charge_progress": dict(enumerate(CHARGE_PROGRESS)),
+    "charging_session": dict(enumerate(CHARGING_SESSION)),
 }
 
 
-# Message -> every field the shim can emit for it (DIN and ISO 15118-2 share names),
+# DC_EVStatus (requests) / DC_EVSEStatus (responses); conditioning flags are DIN only.
+_EV_STATUS = ("soc", "ev_ready", "ev_error_code", "ev_cabin_conditioning", "ev_ress_conditioning")
+_EVSE_STATUS = (
+    "evse_status_code",
+    "evse_notification",
+    "notification_max_delay",
+    "evse_isolation_status",
+)
+
+# Message -> every body field the shim can emit for it (DIN and ISO 15118-2 share names),
 # so each event's schema is complete up front: the shim emits optional fields only
-# when present. The shim↔codec contract: a field missing here is dropped.
+# when present. The shim<->codec contract: a field missing here is dropped.
 _MSG_FIELDS: dict[str, tuple[str, ...]] = {
     "SessionSetupReq": ("evccid",),
     "SessionSetupRes": ("response_code", "evse_id", "datetime_now"),
-    "ServiceDiscoveryRes": ("response_code",),
+    "ServiceDiscoveryReq": (),
+    "ServiceDiscoveryRes": ("response_code", "payment_options", "energy_transfer_modes"),
+    "ServicePaymentSelectionReq": ("selected_payment_option",),
     "ServicePaymentSelectionRes": ("response_code",),
+    "PaymentServiceSelectionReq": ("selected_payment_option",),
     "PaymentServiceSelectionRes": ("response_code",),
+    "ContractAuthenticationReq": (),
     "ContractAuthenticationRes": ("response_code",),
+    "AuthorizationReq": (),
     "AuthorizationRes": ("response_code",),
     "ChargeParameterDiscoveryReq": (
         "requested_energy_transfer",
-        "soc",
+        *_EV_STATUS,
         "ev_max_voltage",
         "ev_max_current",
         "ev_max_power",
@@ -143,24 +184,51 @@ _MSG_FIELDS: dict[str, tuple[str, ...]] = {
     "ChargeParameterDiscoveryRes": (
         "response_code",
         "evse_processing",
+        *_EVSE_STATUS,
         "evse_max_voltage",
         "evse_max_current",
         "evse_max_power",
+        "evse_min_voltage",
+        "evse_min_current",
+        "evse_peak_current_ripple",
+        "evse_current_regulation_tolerance",
+        "evse_energy_to_be_delivered",
     ),
-    "CableCheckReq": ("soc",),
-    "CableCheckRes": ("response_code", "evse_processing", "evse_status_code"),
-    "PreChargeReq": ("soc", "ev_target_voltage", "ev_target_current"),
-    "PreChargeRes": ("response_code", "evse_present_voltage", "evse_status_code"),
-    "PowerDeliveryRes": ("response_code",),
-    "CurrentDemandReq": ("soc", "ev_target_voltage", "ev_target_current", "charging_complete"),
+    "CableCheckReq": _EV_STATUS,
+    "CableCheckRes": ("response_code", "evse_processing", *_EVSE_STATUS),
+    "PreChargeReq": (*_EV_STATUS, "ev_target_voltage", "ev_target_current"),
+    "PreChargeRes": ("response_code", "evse_present_voltage", *_EVSE_STATUS),
+    "PowerDeliveryReq": ("ready_to_charge", "charge_progress", *_EV_STATUS),
+    "PowerDeliveryRes": ("response_code", *_EVSE_STATUS),
+    "CurrentDemandReq": (
+        *_EV_STATUS,
+        "ev_target_voltage",
+        "ev_target_current",
+        "charging_complete",
+        "ev_max_voltage",
+        "ev_max_current",
+        "ev_max_power",
+        "bulk_charging_complete",
+        "remaining_time_to_full_soc",
+        "remaining_time_to_bulk_soc",
+    ),
     "CurrentDemandRes": (
         "response_code",
         "evse_present_voltage",
         "evse_present_current",
-        "evse_status_code",
+        "evse_current_limit_achieved",
+        "evse_voltage_limit_achieved",
+        "evse_power_limit_achieved",
+        *_EVSE_STATUS,
+        "evse_max_voltage",
+        "evse_max_current",
+        "evse_max_power",
     ),
+    "ChargingStatusReq": (),
     "ChargingStatusRes": ("response_code",),
-    "WeldingDetectionRes": ("response_code", "evse_present_voltage"),
+    "WeldingDetectionReq": _EV_STATUS,
+    "WeldingDetectionRes": ("response_code", "evse_present_voltage", *_EVSE_STATUS),
+    "SessionStopReq": ("charging_session",),
     "SessionStopRes": ("response_code",),
     "SupportedAppProtocolReq": (
         "num_protocols",
@@ -174,12 +242,13 @@ _MSG_FIELDS: dict[str, tuple[str, ...]] = {
 
 
 def _event_fields(msg: str, fields: tuple[str, ...]) -> tuple[str, ...]:
-    """Registered schema: DIN/ISO-2 events add ``protocol`` (the grammar that decoded
-    the row) and ``response_code_iso2`` (its response codes diverge from DIN's)."""
+    """Registered schema: DIN/ISO-2 events add ``session_id`` (header), ``protocol``
+    (the grammar that decoded the row) and ``response_code_iso2`` (its response codes
+    diverge from DIN's)."""
     if msg.startswith("SupportedAppProtocol"):
         return fields
     iso2 = ("response_code_iso2",) if "response_code" in fields else ()
-    return (*fields, *iso2, "protocol")
+    return ("session_id", *fields, *iso2, "protocol")
 
 
 _EVENT_FIELDS = {msg: _event_fields(msg, fields) for msg, fields in _MSG_FIELDS.items()}
@@ -216,6 +285,32 @@ _FIELD_META: dict[str, tuple[Any, str | None]] = {
     "ev_energy_capacity": (_DT.Float32, "Wh"),
     "full_soc": (_DT.Int8, "%"),
     "bulk_soc": (_DT.Int8, "%"),
+    "session_id": (_DT.String, None),
+    "ev_ready": (_DT.Boolean, None),
+    "ev_error_code": (_DT.UInt8, None),
+    "ev_cabin_conditioning": (_DT.Boolean, None),
+    "ev_ress_conditioning": (_DT.Boolean, None),
+    "evse_isolation_status": (_DT.UInt8, None),
+    "evse_notification": (_DT.UInt8, None),
+    # xs:unsignedInt in DIN, xs:unsignedShort in ISO 15118-2.
+    "notification_max_delay": (_DT.UInt32, "s"),
+    "ready_to_charge": (_DT.Boolean, None),
+    "charge_progress": (_DT.UInt8, None),
+    "charging_session": (_DT.UInt8, None),
+    "selected_payment_option": (_DT.UInt8, None),
+    "payment_options": (_DT.String, None),
+    "energy_transfer_modes": (_DT.String, None),
+    "evse_min_voltage": (_DT.Float32, "V"),
+    "evse_min_current": (_DT.Float32, "A"),
+    "evse_peak_current_ripple": (_DT.Float32, "A"),
+    "evse_current_regulation_tolerance": (_DT.Float32, "A"),
+    "evse_energy_to_be_delivered": (_DT.Float32, "Wh"),
+    "evse_current_limit_achieved": (_DT.Boolean, None),
+    "evse_voltage_limit_achieved": (_DT.Boolean, None),
+    "evse_power_limit_achieved": (_DT.Boolean, None),
+    "bulk_charging_complete": (_DT.Boolean, None),
+    "remaining_time_to_full_soc": (_DT.Float32, "s"),
+    "remaining_time_to_bulk_soc": (_DT.Float32, "s"),
 }
 
 # Coerce a decoded JSON value to the Python type the field's DataType expects.

@@ -12,7 +12,15 @@ from types import SimpleNamespace
 import pytest
 
 from zelos_extension_v2g import slac
-from zelos_extension_v2g.codec import _FIELD_META, _MSG_FIELDS, _VALUE_TABLES, DIN, ISO2, _ts_ns
+from zelos_extension_v2g.codec import (
+    _EVENT_FIELDS,
+    _FIELD_META,
+    _MSG_FIELDS,
+    _VALUE_TABLES,
+    DIN,
+    ISO2,
+    _ts_ns,
+)
 from zelos_extension_v2g.config import Branch, PacketOptions, make_codec
 from zelos_extension_v2g.converter import convert_capture, resolve_trz_output
 from zelos_extension_v2g.exi import libv2g
@@ -107,6 +115,13 @@ def test_layer2_exi_decode() -> None:
     )
     assert setup["evccid"] == "98ed5cdad998"
 
+    # DateTimeNow is optional and absent here: no field, never uninitialised memory.
+    res = next(
+        d for m in s.messages if (d := libv2g.decode_din(m.exi)) and d["msg"] == "SessionSetupRes"
+    )
+    assert "datetime_now" not in res
+    assert res["session_id"] == "0102030405060708"
+
     # CableCheck reports SoC (this session holds steady at 55%).
     socs = [
         d["soc"]
@@ -193,6 +208,8 @@ _ISO2_SESSION_SETUP_RES = bytes.fromhex("809802275de64d834b5d1f11e020256968c0c0c
 _ISO2_CURRENT_DEMAND_RES = bytes.fromhex(
     "809802275de64d834b5d1f10e00000002040840861d000c000000021024138041844138105098750095a5a30303030300008"
 )
+# Encoded with libcbv2g: ChargeProgress Stop, EVErrorCode FAILED_EVShiftPosition, SoC 80.
+_ISO2_POWER_DELIVERY_STOP = bytes.fromhex("80980237ab6fbbc04080c11151000200850140")
 
 
 @pytest.mark.skipif(not libv2g.available(), reason="no libcbv2g shim for this platform")
@@ -210,6 +227,13 @@ def test_iso2_exi_decode() -> None:
     assert demand["msg"] == "CurrentDemandRes"
     assert demand["evse_present_voltage"] == pytest.approx(371.8, abs=0.1)
     assert demand["evse_status_code"] == 1  # EVSE_Ready
+    assert demand["evse_isolation_status"] == 1  # Valid
+    assert demand["evse_max_power"] == 150000  # 150 * 10^3 W
+    assert demand["session_id"] == "9d7799360d2d747c"
+
+    stop = libv2g.decode_iso2(_ISO2_POWER_DELIVERY_STOP)
+    assert stop is not None
+    assert (stop["charge_progress"], stop["ev_error_code"], stop["soc"]) == (1, 2, 80)
 
     # The ISO-2 bytes are not valid DIN — codec dispatch relies on this falling through.
     assert libv2g.decode_din(_ISO2_CURRENT_DEMAND_RES) is None
@@ -247,6 +271,10 @@ def test_trace_fields_present_via_reader(tmp_path: Path) -> None:
             "charge_parameter_discovery_res.evse_max_voltage",
             "cable_check_req.soc",
             "pre_charge_res.evse_present_voltage",
+            "pre_charge_req.ev_error_code",
+            "pre_charge_res.evse_isolation_status",
+            "service_discovery_res.energy_transfer_modes",
+            "session_stop_req.session_id",
         )
     }
     missing = expected - paths
@@ -382,18 +410,25 @@ def test_msg_fields_cover_shim() -> None:
     """Each decoded event's schema is the message's full field set from the shim, so a
     later instance carrying an optional field the first lacked still logs."""
     shim = (Path(__file__).parents[1] / "native" / "v2g_din_shim.c").read_text()
+    field = r'\\"(?!msg\\")(\w+)\\":'
+    # Multi-line static helpers emit shared field groups (DC_EVStatus, ...): resolve calls.
+    helper = r"static \w+ (\w+)\([^)]*\) \{\n(.*?)\n\}"
+    helpers = {n: set(re.findall(field, body)) for n, body in re.findall(helper, shim, re.S)}
+    assert helpers["begin"] == {"session_id"}  # header field, added per event by the codec
+    calls = "|".join(n for n, f in helpers.items() if f and n != "begin")
     emitted: dict[str, set[str]] = {}
     msg = None
     # Message names (`M("X")` or a literal `\"msg\":\"X\"`), then the fields emitted after.
-    pattern = r'M\("(\w+)"\)|\\"msg\\":\\"(\w+)\\"|\\"(?!msg\\")(\w+)\\":'
-    for m in re.finditer(pattern, shim):
+    pattern = rf'M\("(\w+)"\)|\\"msg\\":\\"(\w+)\\"|{field}|\b({calls})\('
+    for m in re.finditer(pattern, re.sub(helper, "", shim, flags=re.S)):
         if m[1] or m[2]:
             msg = m[1] or m[2]
             emitted.setdefault(msg, set())
-        else:
-            emitted[msg].add(m[3])
-    assert {k: set(v) for k, v in _MSG_FIELDS.items()} == {k: v for k, v in emitted.items() if v}
-    assert {f for v in _MSG_FIELDS.values() for f in v} <= _FIELD_META.keys()
+        elif msg is not None:
+            emitted[msg] |= {m[3]} if m[3] else helpers[m[4]]
+    del emitted["Unknown"], emitted["SupportedAppProtocol"]  # no schema: nothing decoded
+    assert {k: set(v) for k, v in _MSG_FIELDS.items()} == emitted
+    assert {f for v in _EVENT_FIELDS.values() for f in v} <= _FIELD_META.keys()
 
     codec = _codec()
     base = {"msg": "ChargeParameterDiscoveryReq", "ev_max_voltage": 500.0, "ev_max_current": 1.0}

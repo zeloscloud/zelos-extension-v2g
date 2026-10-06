@@ -67,7 +67,9 @@ install; nothing is published to PyPI** — keep it that way.
 - **Shim ↔ codec contract:** every field the shim can emit for a message must be listed under
   it in `codec._MSG_FIELDS` (the event schema is registered whole, since optional fields are
   emitted only when present) and typed in `_FIELD_META` (XSD widths), or it is dropped.
-  `test_msg_fields_cover_shim` diffs the table against the C source.
+  `test_msg_fields_cover_shim` diffs the table against the C source (multi-line `static`
+  helpers included). Emit an optional element only under its `_isUsed` flag; `session_id`
+  (header) is added to every DIN/ISO-2 event by `_event_fields`.
 - **Rebuild:** `bash native/build.sh` (needs `cmake`, a C compiler, `git`; position-independent
   code is required on x86_64). `bash native/build-linux.sh` cross-builds the Linux `.so`s in
   manylinux containers. Commit the rebuilt artifacts. `LIBCBV2G_REF` pins the libcbv2g commit
