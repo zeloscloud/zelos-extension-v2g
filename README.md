@@ -106,8 +106,9 @@ Standalone (no agent config): `uv run python main.py live --iface eth0` or `--re
 
 > Live capture needs raw-socket rights on the agent's machine. The
 > `V2G/check_permissions` action opens a capture and, if refused, returns the fix
-> (macOS: `/dev/bpf` access via ChmodBPF; Linux: `setcap cap_net_raw,cap_net_admin` on
-> the extension's interpreter, or root). An interface that fails to open is logged and
+> (macOS: `/dev/bpf` access via ChmodBPF; Linux: `AmbientCapabilities=CAP_NET_RAW` on
+> the agent's systemd unit, or root; or, broader, `setcap cap_net_raw=eip` on the
+> interpreter, which covers every program it runs and is lost on its upgrade). An interface that fails to open is logged and
 > skipped; the extension exits only if none opens. `V2G/check_permissions` also runs
 > while the extension is stopped, so it works when a start failed.
 >
