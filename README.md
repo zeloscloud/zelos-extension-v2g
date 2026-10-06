@@ -177,8 +177,9 @@ One branch per interface (live) or per file (replay, convert), `<name>` below:
 | `<prefix>/<name>/CAN/Frame` | SocketCAN frames in a converted, replayed or piped capture (`zelos.can.frame.v1`). |
 | `<prefix>/<name>/CAN/<id>_<message>` | DBC-decoded CAN signals (`--dbc` / `advanced.database_files`). |
 
-With the prefix cleared, `<name>` is the source and V2G events are unprefixed; the packet
-and CAN events keep their `<name>/` segment (`<name>/<name>/packets`). Logs land at
+With the prefix cleared, `<name>` is the source and V2G and CAN events are unprefixed.
+The one exception is packet rows, which keep their `<name>/` segment
+(`<name>/<name>/packets`, [#9](https://github.com/zeloscloud/zelos-extension-v2g/issues/9)). Logs land at
 `<prefix>/log` (`v2g_log/log` when cleared).
 
 ## Actions

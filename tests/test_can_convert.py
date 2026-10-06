@@ -162,7 +162,7 @@ def test_combined_shares_one_writer(tmp_path: Path) -> None:
     ns = zelos_sdk.TraceNamespace("converter")
     with zelos_sdk.TraceWriter(str(out), namespace=ns):
         v2g = make_codec("V2G", Branch("x"), PacketOptions(log_packets=False), namespace=ns)
-        can = CanIngest(v2g.source, "x")
+        can = CanIngest(v2g.source, "x", "x/")
         v2g.emit_slac(
             SlacFrame(ts_ns=10**9, mmtype=0x6064, name="CM_SLAC_PARM.REQ", src_mac="a", dst_mac="b")
         )
@@ -172,6 +172,13 @@ def test_combined_shares_one_writer(tmp_path: Path) -> None:
     assert _sources(paths) == {"V2G"}
     assert any(p.startswith("*/V2G/x/slac.") for p in paths)
     assert any(p.startswith("*/V2G/x/CAN/Frame.") for p in paths)
+
+    # Prefix cleared: the branch owns source `x`, and CAN is unprefixed like its V2G events.
+    cleared = tmp_path / "cleared.trz"
+    convert_capture(COMBINED_FIXTURE, cleared, prefix="")
+    events = _event_types(cleared)
+    assert {"*/combined_can_v2g/CAN/Frame", "*/combined_can_v2g/slac"} <= events.keys()
+    assert not any("/combined_can_v2g/combined_can_v2g/CAN" in p for p in events)
 
 
 # ─── combined CAN+V2G end-to-end (committed 2-interface fixture, query both) ───

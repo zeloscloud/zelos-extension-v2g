@@ -2,9 +2,9 @@
 
 CAN frame cracking (raw logging + DBC signal decode, value tables, multiplexing)
 lives in the shared ``zelos-can`` package; this is only the glue that nests a
-capture's CAN rows under its V2G branch: ``<name>/CAN/Frame`` (raw,
-``zelos.can.frame.v1``) and ``<name>/CAN/<message>`` (with a DBC), on the same
-source object as that branch's V2G events.
+capture's CAN rows beside its V2G events: ``<prefix>CAN/Frame`` (raw,
+``zelos.can.frame.v1``) and ``<prefix>CAN/<message>`` (with a DBC), on the same
+source object, with the branch's own event prefix (``<name>/``, or none when cleared).
 """
 
 from __future__ import annotations
@@ -21,13 +21,15 @@ logger = logging.getLogger(__name__)
 
 
 class CanIngest:
-    """A ``zelos-can`` ``CanDecoder`` writing into ``source`` under ``<name>/CAN``.
+    """A ``zelos-can`` ``CanDecoder`` writing into ``source`` under ``<prefix>CAN``.
 
     ``dbcs`` are merged in order: a later file wins a message an earlier one defines
     differently.
     """
 
-    def __init__(self, source: zelos_sdk.TraceSource, name: str, dbcs: Sequence[str] = ()) -> None:
+    def __init__(
+        self, source: zelos_sdk.TraceSource, name: str, prefix: str, dbcs: Sequence[str] = ()
+    ) -> None:
         self.name = name
         # zelos.can.frame.v1 has no error flag: logging one as a data frame would lie.
         self.error_frames = 0
@@ -38,8 +40,8 @@ class CanIngest:
             # register separately and the query layer keeps only the newest.
             source=source,
             raw_source=source,
-            event_prefix=f"{name}/CAN",
-            raw_event_name=f"{name}/CAN/Frame",
+            event_prefix=f"{prefix}CAN",
+            raw_event_name=f"{prefix}CAN/Frame",
             # Keep raw frames even when a DBC is decoding signals.
             log_raw_frames=True,
             timestamp_mode="absolute",
