@@ -4,9 +4,10 @@ Layer 1 — transport/handshake observability that needs no EXI codec: SLAC, SDP
 and the V2GTP message timeline (raw EXI retained per message).
 
 Layer 2 — application-message field decode via the bundled libcbv2g shim
-(``exi.libv2g``). Each DIN 70121 message type becomes its own event whose fields are
-the standard signals (SoC, target/present voltage & current, response codes, …). If
-no decode library is bundled for the platform, Layer 2 is skipped and Layer 1 stands.
+(``exi.libv2g``). Each DIN 70121 / ISO 15118-2 message type becomes its own event
+whose fields are the standard signals (SoC, target/present voltage & current, response
+codes, …), plus ``protocol``: the grammar that decoded the row. If no decode library
+is bundled for the platform, Layer 2 is skipped and Layer 1 stands.
 """
 
 from __future__ import annotations
@@ -32,6 +33,9 @@ from .pcap import SdpFrame, SlacFrame, V2gMessage
 from .stream import V2gStreamDecoder
 
 logger = logging.getLogger(__name__)
+
+DIN = "DIN 70121"
+ISO2 = "ISO 15118-2"
 
 # ─── enum value tables (from the DIN 70121 schema, in schema order) ────────
 
@@ -60,6 +64,16 @@ RESPONSE_CODE = [
     "FAILED_MeteringSignatureNotValid",
     "FAILED_WrongEnergyTransferType",
 ]
+# ISO 15118-2 diverges from index 20 on.
+RESPONSE_CODE_ISO2 = [
+    *RESPONSE_CODE[:20],
+    "FAILED_MeteringSignatureNotValid",
+    "FAILED_NoChargeServiceSelected",
+    "FAILED_WrongEnergyTransferMode",
+    "FAILED_ContactorError",
+    "FAILED_CertificateNotAllowedAtThisEVSE",
+    "FAILED_CertificateRevoked",
+]
 EVSE_STATUS_CODE = [
     "EVSE_NotReady",
     "EVSE_Ready",
@@ -74,6 +88,7 @@ EVSE_STATUS_CODE = [
     "Reserved_B",
     "Reserved_C",
 ]
+# DIN defines 0-1; ISO 15118-2 adds 2.
 EVSE_PROCESSING = ["Finished", "Ongoing", "Ongoing_WaitingForCustomerInteraction"]
 ENERGY_TRANSFER = [
     "AC_single_phase_core",
@@ -97,6 +112,7 @@ _SAP_RESPONSE_CODE = dict(
 
 _VALUE_TABLES = {
     "response_code": dict(enumerate(RESPONSE_CODE)),
+    "response_code_iso2": dict(enumerate(RESPONSE_CODE_ISO2)),
     "evse_status_code": dict(enumerate(EVSE_STATUS_CODE)),
     "evse_processing": dict(enumerate(EVSE_PROCESSING)),
     "requested_energy_transfer": dict(enumerate(ENERGY_TRANSFER)),
@@ -156,6 +172,18 @@ _MSG_FIELDS: dict[str, tuple[str, ...]] = {
     "SupportedAppProtocolRes": ("response_code", "schema_id"),
 }
 
+
+def _event_fields(msg: str, fields: tuple[str, ...]) -> tuple[str, ...]:
+    """Registered schema: DIN/ISO-2 events add ``protocol`` (the grammar that decoded
+    the row) and ``response_code_iso2`` (its response codes diverge from DIN's)."""
+    if msg.startswith("SupportedAppProtocol"):
+        return fields
+    iso2 = ("response_code_iso2",) if "response_code" in fields else ()
+    return (*fields, *iso2, "protocol")
+
+
+_EVENT_FIELDS = {msg: _event_fields(msg, fields) for msg, fields in _MSG_FIELDS.items()}
+
 # Field name -> (zelos DataType, unit), widths per the DIN / ISO 15118-2 / SAP XSD
 # types (percentValueType is xs:byte; versions are xs:unsignedInt).
 _DT = zelos_sdk.DataType
@@ -166,6 +194,7 @@ _FIELD_META: dict[str, tuple[Any, str | None]] = {
     "evse_present_voltage": (_DT.Float32, "V"),
     "evse_present_current": (_DT.Float32, "A"),
     "response_code": (_DT.UInt8, None),
+    "response_code_iso2": (_DT.UInt8, None),
     "evse_status_code": (_DT.UInt8, None),
     "evse_processing": (_DT.UInt8, None),
     "charging_complete": (_DT.Boolean, None),
@@ -194,8 +223,8 @@ _COERCERS = {_DT.Boolean: bool, _DT.String: str, _DT.Float32: float}
 
 # supportedAppProtocol namespace -> friendly dialect label.
 _PROTOCOL_NS = {
-    "urn:din:70121:2012:MsgDef": "DIN 70121",
-    "urn:iso:15118:2:2013:MsgDef": "ISO 15118-2",
+    "urn:din:70121:2012:MsgDef": DIN,
+    "urn:iso:15118:2:2013:MsgDef": ISO2,
 }
 
 
@@ -384,12 +413,12 @@ class V2gCodec:
             ],
         )
 
-    # ── Layer 2: decoded application messages (per-type schema from _MSG_FIELDS) ──
+    # ── Layer 2: decoded application messages (per-type schema from _EVENT_FIELDS) ──
 
     def _decoded_event(self, msg: str) -> Any:
         if msg in self._decoded_events:
             return self._decoded_events[msg]
-        fields = _MSG_FIELDS.get(msg, ())
+        fields = _EVENT_FIELDS.get(msg, ())
         event = None
         if fields:
             F = zelos_sdk.TraceEventFieldMetadata
@@ -404,14 +433,19 @@ class V2gCodec:
         self._decoded_events[msg] = event
         return event
 
-    def _emit_decoded(self, decoded: dict, ts_ns: int) -> bool:
+    def _emit_decoded(self, decoded: dict, ts_ns: int, grammar: str | None) -> bool:
+        """``grammar``: DIN or ISO2, whichever decoder matched; None for SAP."""
         msg = decoded.get("msg")
         event = self._decoded_event(msg) if msg else None
         if event is None:
             return False
-        fields = _MSG_FIELDS[msg]
+        fields = _EVENT_FIELDS[msg]
         signals: dict[str, Any] = {}
+        if grammar:
+            signals["protocol"] = grammar
         for f, v in decoded.items():
+            if f == "response_code" and grammar == ISO2:
+                f = "response_code_iso2"
             if f in fields:
                 signals[f] = _COERCERS.get(_FIELD_META[f][0], int)(v)
             elif f != "msg":
@@ -473,13 +507,15 @@ class V2gCodec:
         ts_ns = m.ts_ns
         decoded: dict | None = None
         dialect: str | None = None
+        grammar: str | None = None  # DIN/ISO2 decoder that matched; None for SAP
         if libv2g.available():
             if (d := libv2g.decode_din(m.exi)) is not None:
-                decoded, dialect = d, "DIN 70121"
+                decoded, grammar = d, DIN
             elif (d := libv2g.decode_iso2(m.exi)) is not None:
-                decoded, dialect = d, "ISO 15118-2"
+                decoded, grammar = d, ISO2
             elif (d := libv2g.decode_sap(m.exi)) is not None:
                 decoded, dialect = d, _protocol_label(d.get("protocol", ""))
+            dialect = grammar or dialect
         self.message_event.log_at(
             ts_ns,
             index=m.index,
@@ -489,7 +525,7 @@ class V2gCodec:
             name=decoded["msg"] if decoded else "(exi)",
             exi=m.exi,
         )
-        emitted = bool(decoded and self._emit_decoded(decoded, ts_ns))
+        emitted = bool(decoded and self._emit_decoded(decoded, ts_ns, grammar))
         self.stats.messages += 1
         self.stats.decoded_messages += emitted
         if dialect and self.stats.protocol is None:

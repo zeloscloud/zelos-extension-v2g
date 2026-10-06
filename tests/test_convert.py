@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from zelos_extension_v2g import slac
-from zelos_extension_v2g.codec import _FIELD_META, _MSG_FIELDS, _ts_ns
+from zelos_extension_v2g.codec import _FIELD_META, _MSG_FIELDS, _VALUE_TABLES, DIN, ISO2, _ts_ns
 from zelos_extension_v2g.config import Branch, PacketOptions, make_codec
 from zelos_extension_v2g.converter import convert_capture, resolve_trz_output
 from zelos_extension_v2g.exi import libv2g
@@ -241,6 +241,8 @@ def test_trace_fields_present_via_reader(tmp_path: Path) -> None:
             "supported_app_protocol_req.protocol",
             "session_setup_req.evccid",
             "session_setup_res.evse_id",
+            "session_setup_res.protocol",
+            "session_setup_res.response_code_iso2",
             "charge_parameter_discovery_req.ev_max_voltage",
             "charge_parameter_discovery_res.evse_max_voltage",
             "cable_check_req.soc",
@@ -395,5 +397,20 @@ def test_msg_fields_cover_shim() -> None:
 
     codec = _codec()
     base = {"msg": "ChargeParameterDiscoveryReq", "ev_max_voltage": 500.0, "ev_max_current": 1.0}
-    assert codec._emit_decoded(base, 1)
-    assert codec._emit_decoded({**base, "bulk_soc": 80, "full_soc": 100}, 2)
+    assert codec._emit_decoded(base, 1, DIN)
+    assert codec._emit_decoded({**base, "bulk_soc": 80, "full_soc": 100}, 2, DIN)
+
+    # Response codes diverge from 20: each grammar writes its own column.
+    codec._decoded_event("CableCheckRes")  # registers the schema + value tables
+    logged = []
+    codec._decoded_events["CableCheckRes"] = SimpleNamespace(
+        log_at=lambda _, **kw: logged.append(kw)
+    )
+    codec._emit_decoded({"msg": "CableCheckRes", "response_code": 23}, 3, ISO2)
+    codec._emit_decoded({"msg": "CableCheckRes", "response_code": 20}, 4, DIN)
+    assert logged == [
+        {"protocol": ISO2, "response_code_iso2": 23},
+        {"protocol": DIN, "response_code": 20},
+    ]
+    assert _VALUE_TABLES["response_code_iso2"][23] == "FAILED_ContactorError"
+    assert _VALUE_TABLES["response_code"][20] == "FAILED_EVSEPresentVoltageToLow"

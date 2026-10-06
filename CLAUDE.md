@@ -54,6 +54,8 @@ On Linux loopback, `open_capture` uses `L2socket`, which drops the `PACKET_OUTGO
 
 `emit_message` tries `decode_din → decode_iso2 → decode_sap`; the dialects are mutually
 exclusive, and DIN / ISO 15118-2 share field names so the codec events are reused across both.
+Each such row carries `protocol` (the decoder that matched). Response codes diverge from 20,
+so ISO-2 rows write `response_code_iso2` (own value table) and leave `response_code` null.
 
 ## Bundled EXI codec
 
