@@ -337,6 +337,7 @@ class ConversionStats:
     sdp_frames: int = 0
     messages: int = 0
     decoded_messages: int = 0
+    tcp_retransmissions: int = 0
     protocol: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -345,6 +346,7 @@ class ConversionStats:
             "sdp_frames": self.sdp_frames,
             "messages": self.messages,
             "decoded_messages": self.decoded_messages,
+            "tcp_retransmissions": self.tcp_retransmissions,
             "protocol": self.protocol,
         }
 
@@ -434,6 +436,7 @@ class V2gCodec:
                 raw, link_type=dlt, timestamp_ns=ts_ns, orig_len=getattr(pkt, "wirelen", None)
             )
         self._stream.feed_packet(pkt, ts_ns)
+        self.stats.tcp_retransmissions = self._stream.retransmissions
 
     def flush(self) -> None:
         """Push buffered packet rows through; ``decode_frame`` has no timer of its own."""
@@ -441,7 +444,13 @@ class V2gCodec:
             self.packets.flush()
 
     def report_errors(self) -> None:
-        """Log the per-type count of frames that failed, if any."""
+        """Log the per-type count of frames that failed, and dropped retransmissions."""
+        if self.stats.tcp_retransmissions:
+            logger.info(
+                "%s: %d retransmitted TCP segments dropped",
+                self.name,
+                self.stats.tcp_retransmissions,
+            )
         if self.frame_errors:
             logger.error(
                 "%s: %d of %d frames failed: %s",

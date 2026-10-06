@@ -406,6 +406,27 @@ def test_cooked_sll_link_layer_decodes_slac() -> None:
     assert got[0].name == "CM_SLAC_PARM.REQ"  # decoded the same as over Ethernet
 
 
+def test_tcp_retransmission_dropped() -> None:
+    """A retransmitted segment (here across the 32-bit seq wrap) yields no second message;
+    the next new segment still does."""
+    from scapy.layers.inet import TCP
+    from scapy.layers.inet6 import IPv6
+    from scapy.layers.l2 import Ether
+
+    def seg(seq: int, body: bytes):
+        v2gtp = bytes([0x01, 0xFE, 0x80, 0x01]) + len(body).to_bytes(4, "big") + body
+        tcp = TCP(sport=15118, seq=seq, flags="PA")  # scapy's default flags are SYN
+        return Ether() / IPv6(src="fe80::1", dst="fe80::2") / tcp / v2gtp
+
+    got: list = []
+    dec = V2gStreamDecoder(on_message=got.append)
+    first = 2**32 - 4
+    for pkt in (seg(first, b"\xaa"), seg(first, b"\xaa"), seg(first + 9 - 2**32, b"\xbb")):
+        dec.feed_packet(pkt, 1)
+    assert [m.exi for m in got] == [b"\xaa", b"\xbb"]
+    assert dec.retransmissions == 1
+
+
 def test_msg_fields_cover_shim() -> None:
     """Each decoded event's schema is the message's full field set from the shim, so a
     later instance carrying an optional field the first lacked still logs."""

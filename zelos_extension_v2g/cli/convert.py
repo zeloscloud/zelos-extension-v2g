@@ -102,3 +102,5 @@ def convert(
         click.echo(f"  V2G:      {v['protocol'] or 'unknown'}")
         click.echo(f"            SLAC {v['slac_frames']} / SDP {v['sdp_frames']} frames")
         click.echo(f"            {v['messages']} messages ({v['decoded_messages']} decoded)")
+        if v["tcp_retransmissions"]:
+            click.echo(f"            {v['tcp_retransmissions']} retransmitted TCP segments dropped")
