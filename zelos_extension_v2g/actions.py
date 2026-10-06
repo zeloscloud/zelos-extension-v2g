@@ -95,9 +95,14 @@ def _remediation(system: str) -> str:
         # setcap needs the real file, not the venv's symlink.
         python = shlex.quote(os.path.realpath(sys.executable))
         return (
-            "Grant raw-socket capture to the extension's interpreter:\n\n"
-            f"    sudo setcap cap_net_raw,cap_net_admin=eip {python}\n\n"
-            "then restart the extension. Or run the agent as root."
+            "Grant CAP_NET_RAW to the Zelos agent, e.g. a systemd drop-in "
+            "(`sudo systemctl edit <agent unit>`):\n\n"
+            "    [Service]\n"
+            "    AmbientCapabilities=CAP_NET_RAW\n\n"
+            "then restart the agent. Or run the agent as root.\n\n"
+            "Broader alternative: `sudo setcap cap_net_raw=eip " + python + "`. "
+            f"It applies to every program run with {python}, and is lost when that "
+            "interpreter is upgraded. Restart the extension after."
         )
     return "Live capture is supported on Linux and macOS. Use Replay PCAP File instead."
 
