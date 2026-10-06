@@ -2,9 +2,10 @@
 
 Feeds scapy packets one at a time, maintaining per-stream TCP reassembly, and
 invokes callbacks as SLAC frames, SDP frames, and V2G application messages
-complete. Reassembly is capture-order concatenation per 4-tuple: it assumes an
-in-order, loss-free capture (true for a bridged V2G session) and does not reorder
-by sequence number or drop retransmits.
+complete. Reassembly is capture-order concatenation per 4-tuple, minus bytes already
+delivered: each direction tracks its next expected sequence number, so a retransmitted
+segment is dropped (counted in ``retransmissions``) and a partial overlap is trimmed.
+It does not reorder: a segment past a gap is appended as it arrives.
 """
 
 from __future__ import annotations
@@ -55,6 +56,8 @@ class V2gStreamDecoder:
         self.on_sdp = on_sdp
         self.on_message = on_message
         self._framers: dict[tuple, _Framer] = {}
+        self._next_seq: dict[tuple, int] = {}  # per direction: next undelivered byte
+        self.retransmissions = 0  # TCP segments dropped as already delivered
         self._index = 0
         self.secc_ip: str | None = None
         self.secc_port: int | None = None
@@ -82,10 +85,23 @@ class V2gStreamDecoder:
                     if self.on_sdp:
                         self.on_sdp(sdp)
         elif TCP in pkt:
-            data = bytes(pkt[TCP].payload)
+            tcp = pkt[TCP]
+            key = (ip.src, tcp.sport, ip.dst, tcp.dport)
+            if tcp.flags.S:
+                self._next_seq.pop(key, None)  # a new connection on this 4-tuple
+            data = bytes(tcp.payload)
             if not data:
                 return
-            key = (ip.src, pkt[TCP].sport, ip.dst, pkt[TCP].dport)
+            nxt = self._next_seq.get(key)
+            end = (tcp.seq + len(data)) % 2**32
+            if nxt is not None:
+                behind = (nxt - tcp.seq) % 2**32  # bytes of this segment already delivered
+                if behind < 2**31:  # starts at or before nxt (wraparound-safe)
+                    if behind >= len(data):
+                        self.retransmissions += 1
+                        return
+                    data = data[behind:]
+            self._next_seq[key] = end
             framer = self._framers.setdefault(key, _Framer())
             for ptype, body in framer.feed(data):
                 msg = V2gMessage(

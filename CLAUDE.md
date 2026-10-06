@@ -10,7 +10,7 @@ both CAN and V2G converts to one time-aligned `.trz`.
 |------|------|
 | `protocol.py` | Wire constants + SLAC MMTYPE table. |
 | `pcap.py` | SLAC/SDP/V2GTP record types + per-frame parse helpers; `link_frame` (Ethernet + Linux cooked SLL). |
-| `stream.py` | `V2gStreamDecoder`: incremental TCP reassembly + V2GTP framing, the one decode path. |
+| `stream.py` | `V2gStreamDecoder`: incremental TCP reassembly (retransmits dropped by seq, no reordering) + V2GTP framing, the one decode path. |
 | `slac.py` | Per-frame SLAC field decode (attenuation, match). |
 | `codec.py` | `V2gCodec`: one branch; `feed(pkt)` → packet row + V2G events; `trace_layout`; `_MSG_FIELDS`. |
 | `config.py` | Config parsing (`interfaces[]`, `advanced`), `branch_name`, `database_files`, `make_codec`. |
