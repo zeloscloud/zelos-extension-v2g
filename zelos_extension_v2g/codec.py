@@ -383,7 +383,7 @@ class V2gCodec:
         self.source = source
         self.name = name
         # Set for file paths (convert, replay, stdin): SocketCAN frames decode into
-        # `<name>/CAN/...`, the CanIngest created on the first one.
+        # `<prefix>CAN/...` beside the V2G events, the CanIngest created on the first one.
         self.decode_can = can
         self.dbcs = list(dbcs)
         self.can: CanIngest | None = None
@@ -427,7 +427,7 @@ class V2gCodec:
         raw = pkt.original or bytes(pkt)
         if self.decode_can and isinstance(pkt, CAN):
             if self.can is None:
-                self.can = CanIngest(self.source, self.name, self.dbcs)
+                self.can = CanIngest(self.source, self.name, self._prefix, self.dbcs)
             self.can.emit(ts_ns, raw)
             return
         dlt = conf.l2types.layer2num.get(type(pkt))
