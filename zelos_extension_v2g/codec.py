@@ -1,4 +1,4 @@
-"""Turn a decoded V2G session into Zelos trace events.
+"""Turn V2G records into Zelos trace events.
 
 Layer 1 — transport/handshake observability that needs no EXI codec: SLAC, SDP,
 and the V2GTP message timeline (raw EXI retained per message).
@@ -20,7 +20,7 @@ import zelos_sdk
 
 from . import slac
 from .exi import libv2g
-from .pcap import DecodedSession, SdpFrame, SlacFrame, V2gMessage
+from .pcap import SdpFrame, SlacFrame, V2gMessage
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +83,7 @@ _VALUE_TABLES = {
 }
 
 
-# Field name -> (zelos DataType, unit). The shim↔codec contract: every field the
-# libcbv2g shim emits must appear here, or it is dropped from the trace.
+# Field -> (DataType, unit). A field the shim emits that is missing here is dropped.
 _DT = zelos_sdk.DataType
 _FIELD_META: dict[str, tuple[Any, str | None]] = {
     "soc": (_DT.UInt8, "%"),
@@ -161,7 +160,7 @@ def _ts_ns(ts: float) -> int:
 
 
 class V2gCodec:
-    """Registers V2G trace-event schemas and emits rows from a DecodedSession."""
+    """Registers V2G trace-event schemas and emits one row per record."""
 
     def __init__(
         self,
@@ -235,8 +234,7 @@ class V2gCodec:
     # ── Layer 2: decoded application messages (lazy per-type schema) ───────
 
     def _decoded_event(self, msg: str, fields: list[str]) -> Any:
-        # Schema is created once from the first instance's field set; safe because
-        # the shim emits a fixed field set per message type.
+        # The shim emits a fixed field set per message type, so the first one defines it.
         event = self._decoded_events.get(msg)
         if event is not None:
             return event
@@ -269,7 +267,7 @@ class V2gCodec:
         event.log_at(ts_ns, **signals)
         return True
 
-    # ── per-record emit (shared by batch convert + live capture) ──────────
+    # ── per-record emit (shared by convert and live capture) ──────────────
 
     def emit_slac(self, f: SlacFrame) -> None:
         self.slac_event.log_at(
@@ -339,31 +337,3 @@ class V2gCodec:
         )
         emitted = bool(decoded and self._emit_decoded(decoded, ts_ns))
         return decoded, dialect, emitted
-
-    # ── batch driver ──────────────────────────────────────────────────────
-
-    def process(self, session: DecodedSession) -> ConversionStats:
-        stats = ConversionStats()
-        if session.start_ts is not None and session.end_ts is not None:
-            stats.duration_seconds = session.end_ts - session.start_ts
-
-        for f in session.slac:
-            self.emit_slac(f)
-            stats.slac_frames += 1
-
-        for f in session.sdp:
-            self.emit_sdp(f)
-            stats.sdp_frames += 1
-
-        if not libv2g.available():
-            logger.warning("No libcbv2g shim for this platform; emitting Layer-1 framing only")
-        for m in session.messages:
-            stats.messages += 1
-            _decoded, dialect, emitted = self.emit_message(m)
-            if emitted:
-                stats.decoded_messages += 1
-            if dialect and stats.protocol is None:
-                stats.protocol = dialect
-
-        logger.info("Emitted V2G trace: %s", stats.to_dict())
-        return stats

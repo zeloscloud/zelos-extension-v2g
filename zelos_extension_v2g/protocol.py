@@ -10,8 +10,6 @@ Kept dependency-free so it can be unit-tested in isolation.
 from __future__ import annotations
 
 # ─── Ethernet / link layer ────────────────────────────────────────────────
-# (scapy dissects Ethernet/IPv6/TCP/UDP; we only need the HomePlug AV ethertype
-# to spot SLAC management frames.)
 
 ETHERTYPE_HOMEPLUG_AV = 0x88E1  # HomePlug AV / Green PHY MME frames (SLAC lives here)
 
@@ -37,13 +35,7 @@ V2GTP_INVERSE_VERSION = 0xFE
 V2GTP_HEADER_LEN = 8
 
 # ─── SLAC (Signal Level Attenuation Characterization) ─────────────────────
-# HomePlug AV management message types used by ISO 15118-3 SLAC. The low bits
-# of the MMTYPE encode the variant (REQ / CNF / IND / RSP).
-
-# HomePlug AV MMTYPEs use a base value per message, with the low 2 bits selecting
-# the variant: REQ=0, CNF=1, IND=2, RSP=3. Generate all four per base so e.g.
-# CM_START_ATTEN_CHAR.IND (0x6068+2=0x606A) and CM_ATTEN_CHAR.IND (0x606C+2=0x606E)
-# resolve correctly.
+# A HomePlug AV MMTYPE is a base plus its variant in the low 2 bits: REQ, CNF, IND, RSP.
 _SLAC_BASES = {
     0x6008: "CM_SET_KEY",
     0x601C: "CM_AMP_MAP",
@@ -82,9 +74,7 @@ def v2g_direction(
 ) -> str:
     """Label a TCP flow by V2G role using the SDP-discovered SECC endpoint.
 
-    Shared by the batch (pcap) and incremental (stream) decoders so both tag
-    direction identically. Falls back to ``"{sport}->{dport}"`` until the SECC
-    endpoint is known.
+    Falls back to ``"{sport}->{dport}"`` until the SECC endpoint is known.
     """
     secc = (secc_ip, secc_port)
     if secc != (None, None):

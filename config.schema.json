@@ -27,7 +27,12 @@
     "log_level": {
       "type": "string",
       "title": "Log Level",
-      "enum": ["DEBUG", "INFO", "WARNING", "ERROR"],
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR"
+      ],
       "default": "INFO"
     }
   }

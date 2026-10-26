@@ -24,14 +24,10 @@ def run_app_mode() -> None:
     config = load_config()
     converter = V2gConverter(config)
 
-    # Live capture mode: stream from a network interface (or replay a pcap).
     iface = config.get("interface") or None
     replay = config.get("replay_pcap") or None
-    # The live source must be created BEFORE init() so init wires it to the live
-    # publisher (same ordering the CAN extension uses).
     codec = V2gCodec(source_name=config.get("source_name") or "v2g") if (iface or replay) else None
 
-    # Register actions BEFORE init — actions registered after init are not advertised.
     zelos_sdk.actions_registry.register(converter)
     zelos_sdk.init(name="v2g", actions=True)
 

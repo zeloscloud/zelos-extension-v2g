@@ -12,6 +12,7 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
+import pyarrow as pa
 import pytest
 import zelos_sdk
 
@@ -143,7 +144,6 @@ def test_combined_shares_one_writer(tmp_path: Path) -> None:
 def _query_values(trz: Path, suffixes: list[str]) -> dict[str, list]:
     """Query raw (unsampled) values for fields (matched by path suffix) from a trace,
     the same read path the app/agent uses (``TraceReader.query`` → Arrow)."""
-    pa = pytest.importorskip("pyarrow")
     reader = zelos_sdk.TraceReader(str(trz))
     reader.open()
     try:
@@ -171,7 +171,6 @@ def test_combined_capture_queries_both_families(tmp_path: Path) -> None:
     This also verifies proper CAN-DBC decoding against ``example.dbc``: scaling,
     signed values, and multiple messages (see make_combined_fixture.py for the
     known frame contents)."""
-    pytest.importorskip("pyarrow")
     out = tmp_path / "combined.trz"
     stats = convert_capture(COMBINED_FIXTURE, out, dbc=EXAMPLE_DBC)
 
