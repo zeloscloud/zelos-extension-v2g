@@ -1,20 +1,9 @@
 """Convert a capture (.pcap/.pcapng) to a Zelos trace (.trz).
 
-Mirrors the zelos-extension-can converter: decode into records, then emit them
-through a codec into an isolated TraceNamespace + TraceWriter so converted data
-never mixes with any live session.
-
-Two entry points:
-
-- :func:`convert_v2g_pcap` — the original V2G-only batch path (kept intact; the
-  test-suite and the well-verified telemetry path depend on it).
-- :func:`convert_capture` — a single-pass, multi-protocol path that dispatches
-  each frame by link layer: SocketCAN records → ``zelos-can``'s ``CanDecoder``,
-  Ethernet / IPv6 / HomePlug-AV → the V2G decoder. Both write one shared
-  namespace, so a capture carrying **both** CAN and V2G (e.g. a bench recording
-  of a charging session) becomes one time-aligned ``.trz`` with ``can*/*`` and
-  ``v2g/*`` on the same clock. A CAN-only or V2G-only capture falls out of the
-  same pass — whichever decoder matches fires.
+One pass dispatches each frame by link layer: SocketCAN records go to ``zelos-can``'s
+``CanDecoder``, Ethernet / IPv6 / HomePlug-AV frames to the V2G decoder. Both write one
+isolated namespace, so CAN and V2G land in one time-aligned trace that never mixes with
+a live session.
 """
 
 from __future__ import annotations
@@ -28,7 +17,7 @@ import zelos_sdk
 
 from .can_ingest import CanIngest
 from .codec import ConversionStats, V2gCodec
-from .pcap import decode_session, link_frame
+from .pcap import link_frame
 from .socketcan import parse_socketcan
 from .stream import V2gStreamDecoder
 
@@ -57,37 +46,6 @@ def resolve_trz_output(input_file: Path, output: Path | None, overwrite: bool) -
             raise FileExistsError(f"output exists: {out} (enable overwrite to replace)")
         out.unlink()
     return out
-
-
-def convert_v2g_pcap(input_file: Path, output_file: Path) -> ConversionStats:
-    """Convert a V2G ``.pcap`` to ``.trz``. Timestamps are preserved as captured.
-
-    Raises:
-        FileNotFoundError: input file missing.
-        ValueError: unsupported extension or unparseable capture.
-    """
-    input_file = Path(input_file)
-    output_file = Path(output_file)
-    if not input_file.exists():
-        raise FileNotFoundError(f"Input file not found: {input_file}")
-    if input_file.suffix.lower() not in SUPPORTED_FORMATS:
-        raise ValueError(
-            f"Unsupported format '{input_file.suffix}'. Supported: {', '.join(SUPPORTED_FORMATS)}"
-        )
-
-    logger.info("Decoding %s", input_file)
-    session = decode_session(input_file)
-
-    logger.info("Converting %s -> %s", input_file, output_file)
-    converter_namespace = zelos_sdk.TraceNamespace("converter")
-    # Exiting the context calls TraceWriter.close(), which force-flushes all buffered
-    # events before returning (zelos-sdk >= 0.0.10a5), so no post-write settle is needed.
-    with zelos_sdk.TraceWriter(str(output_file), namespace=converter_namespace):
-        codec = V2gCodec(namespace=converter_namespace)
-        stats = codec.process(session)
-
-    logger.info("Conversion complete: %s", stats.to_dict())
-    return stats
 
 
 @dataclass
@@ -141,7 +99,7 @@ def convert_capture(
 ) -> CaptureStats:
     """Convert any capture to ``.trz``, decoding both CAN and V2G in one pass.
 
-    SocketCAN frames become ``can_raw/*`` rows (plus decoded ``can/<message>``
+    SocketCAN frames become ``can_raw/*`` rows (plus decoded ``can_codec/<message>``
     rows when ``dbc`` is given); V2G frames become the usual ``v2g/*`` rows. Both
     share one namespace, so a combined CAN+V2G capture yields one time-aligned
     trace. Timestamps are preserved as captured.
@@ -174,8 +132,7 @@ def convert_capture(
         if span["last"] is None or ts > span["last"]:
             span["last"] = ts
 
-    # The CAN decoder is created lazily on the first SocketCAN frame, so a
-    # pure-V2G capture produces no empty can* tables.
+    # Created on the first SocketCAN frame, so a V2G-only capture gets no empty can* tables.
     can: dict[str, CanIngest | None] = {"ingest": None}
 
     def on_can(f) -> None:
@@ -203,7 +160,6 @@ def convert_capture(
         if dialect and v2g_stats.protocol is None:
             v2g_stats.protocol = dialect
 
-    # Exiting the context force-flushes buffered events (zelos-sdk >= 0.0.10a5).
     with zelos_sdk.TraceWriter(str(output_file), namespace=ns):
         v2g = V2gCodec(namespace=ns)
         v2g_decoder = V2gStreamDecoder(on_slac=on_slac, on_sdp=on_sdp, on_message=on_message)

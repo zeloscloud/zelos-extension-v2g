@@ -94,7 +94,7 @@ Configure the extension with an `interface` to sniff a bridged green-PHY link, o
 hardware). Decoded signals stream to the agent in real time:
 
 ```bash
-zelos extensions start local.zelos-extension-v2g \
+zelos extensions start local.v2g \
   --config '{"interface": "eth0", "source_name": "v2g"}'
 
 zelos live signals
@@ -162,7 +162,7 @@ compiler, and `git`). See [`native/README.md`](native/README.md).
 - [Repository](https://github.com/zeloscloud/zelos-extension-v2g)
 - [Issues](https://github.com/zeloscloud/zelos-extension-v2g/issues)
 - [Zelos Documentation](https://docs.zeloscloud.io)
-- [SDK Guide](https://docs.zeloscloud.io/sdk)
+- [SDK Guide](https://docs.zeloscloud.io/latest/sdk/)
 
 ## License
 

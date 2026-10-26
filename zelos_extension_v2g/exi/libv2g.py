@@ -18,10 +18,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _LIB_DIR = Path(__file__).parent / "_lib"
-# Capacity of the JSON buffer the shim decodes one message into. Decoded telemetry
-# objects are small (a handful of numeric/short-string fields, typically <500 B); this
-# is generous headroom. If a message's JSON ever exceeds it the shim truncates, which
-# we detect (see _decode) rather than emit malformed JSON.
+# One message's decoded JSON is typically under 500 B; _decode detects a truncation.
 _OUT_CAP = 16384
 
 
@@ -58,12 +55,9 @@ def _decode(fn_name: str, exi: bytes) -> dict | None:
     lib = _load()
     if lib is None:
         return None
-    # `exi` is binary (may contain NUL): ctypes passes a pointer to the full bytes
-    # buffer, and the C side reads exactly `len(exi)` bytes (not strlen), so NULs
-    # are safe here.
+    # The shim reads exactly len(exi) bytes, so NULs in the EXI are safe.
     out = ctypes.create_string_buffer(_OUT_CAP)
-    # The shim returns bytes written, or the would-be length if it overran `cap`
-    # (vsnprintf semantics); n >= cap therefore means the JSON was truncated.
+    # vsnprintf semantics: n >= cap is the would-be length of a truncated JSON.
     n = getattr(lib, fn_name)(exi, len(exi), out, _OUT_CAP)
     if n <= 0:
         return None

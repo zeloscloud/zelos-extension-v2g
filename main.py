@@ -8,8 +8,7 @@ import rich_click as click
 
 from zelos_extension_v2g import cli as cli_commands
 
-click.rich_click.USE_RICH_MARKUP = True
-click.rich_click.USE_MARKDOWN = True
+click.rich_click.TEXT_MARKUP = "markdown"
 click.rich_click.SHOW_ARGUMENTS = True
 
 # UTC ISO 8601 with ms, matching the SDK's Rust tracing lines in the same log stream
