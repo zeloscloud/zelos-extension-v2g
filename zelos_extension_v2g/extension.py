@@ -85,7 +85,7 @@ class V2gConverter:
             }
         except (FileNotFoundError, FileExistsError, ValueError) as e:
             return {"status": "error", "message": str(e)}
-        except Exception as e:  # noqa: BLE001 - surface any failure to the action caller
+        except Exception as e:
             logger.exception("Conversion failed")
             return {"status": "error", "message": f"Conversion failed: {e}"}
 

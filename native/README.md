@@ -5,8 +5,9 @@ reimplement a schema-informed EXI codec in Python, we reuse EVerest's
 [`libcbv2g`](https://github.com/EVerest/libcbv2g) (Apache-2.0), the reference
 DIN 70121 / ISO 15118-2/-20 codec.
 
-`v2g_din_shim.c` is a thin C function that decodes one DIN V2G message and emits a
-compact JSON object of the telemetry-relevant fields. `build.sh` statically links it
+`v2g_din_shim.c` is a thin C shim that decodes one DIN 70121, ISO 15118-2 or
+supportedAppProtocol message and emits a compact JSON object of the telemetry-relevant
+fields. `build.sh` statically links it
 against libcbv2g into a single self-contained shared library, written to
 `../zelos_extension_v2g/exi/_lib/libv2gshim-<os>-<arch>.<ext>`.
 
