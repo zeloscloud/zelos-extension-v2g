@@ -22,6 +22,7 @@ def run_app_mode() -> None:
     """Run the extension in agent mode: host the Convert Pcap action, and — when an
     ``interface`` or ``replay_pcap`` is configured — also capture live and stream it."""
     config = load_config()
+    logging.getLogger().setLevel(config.get("log_level") or "INFO")
     converter = V2gConverter(config)
 
     iface = config.get("interface") or None
