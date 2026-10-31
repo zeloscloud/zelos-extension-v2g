@@ -9,14 +9,15 @@ both CAN and V2G converts to one time-aligned `.trz`.
 | Path | Role |
 |------|------|
 | `protocol.py` | Wire constants + SLAC MMTYPE table. |
-| `pcap.py` | scapy offline reader → SLAC/SDP/V2GTP records (`decode_session`); `link_frame` (Ethernet + Linux cooked SLL). |
-| `stream.py` | Incremental V2GTP framer for the live/stdin path (`V2gStreamDecoder`). |
+| `pcap.py` | SLAC/SDP/V2GTP record types and per-frame parsers; `link_frame` (Ethernet + Linux cooked SLL). |
+| `stream.py` | Incremental V2GTP framer every ingest path feeds (`V2gStreamDecoder`). |
 | `slac.py` | Per-frame SLAC field decode (attenuation, match). |
 | `codec.py` | V2G records → trace events; `emit_message` dispatches DIN/ISO-2/SAP. |
 | `socketcan.py` | Parse `LINKTYPE_CAN_SOCKETCAN` (227) records → `CanFrame`. |
 | `can_ingest.py` | Glue to `zelos_can.CanDecoder` (raw + DBC decode lives in `zelos-can`). |
-| `converter.py` | `convert_capture(in, out, dbc=)` — any capture → `.trz`; `convert_v2g_pcap` (V2G-only batch). |
+| `converter.py` | `convert_capture(in, out, dbc=)` — any capture → `.trz`. |
 | `live.py` | `sniff_into` (iface/replay) + `decode_stream_into` (stdin pcap). |
+| `extension.py` | `V2gConverter`: the Convert Pcap and Get Status actions. |
 | `cli/` | `app.py` (agent app-mode), `convert.py`, `live.py`, `decode.py`. |
 | `exi/libv2g.py`, `exi/_lib/` | ctypes binding + prebuilt libcbv2g shim (one per platform). |
 | `native/` | The C shim (`v2g_din_shim.c`) + build scripts. |
@@ -74,19 +75,16 @@ has no linktype-227 dissector. Two `CanDecoder` gotchas:
 2. Bind it to the writer's namespace via injected `source=` / `raw_source=` `TraceSource`s —
    `source_name=` alone binds the default namespace and the trace comes out empty.
 
-## SDK init ordering
+## Trace output
 
-In app-mode (`cli/app.py`) the live `V2gCodec` and all actions are created **before**
-`zelos_sdk.init()` — anything registered after init is invisible to the agent. The offline
-converter uses an isolated `TraceNamespace` + `TraceWriter` (no agent). The converter relies on
-`TraceWriter.close()` to flush buffered events (needs `zelos-sdk >= 0.0.10a5`). Converted rows
-keep the original capture timestamps; the replay path re-stamps to arrival time (like
-`tcpreplay`).
+The offline converter uses an isolated `TraceNamespace` + `TraceWriter` (no agent), and relies
+on `TraceWriter.close()` to flush buffered events. Converted rows keep the original capture
+timestamps; the replay path re-stamps to arrival time (like `tcpreplay`).
 
 ## Testing
 
 ```bash
-just check    # ruff lint
+just check    # ruff format check and lint
 just format   # ruff format
 just test     # pytest — runs against the committed pyPLC fixtures in tests/files/
 just package  # zelos extensions package .

@@ -85,10 +85,10 @@ class V2gConverter:
             }
         except (FileNotFoundError, FileExistsError, ValueError) as e:
             return {"status": "error", "message": str(e)}
-        except Exception as e:  # noqa: BLE001 - surface any failure to the action caller
+        except Exception as e:
             logger.exception("Conversion failed")
             return {"status": "error", "message": f"Conversion failed: {e}"}
 
-    @zelos_sdk.action("Get Status", "Extension status")
+    @zelos_sdk.action("Get Status", "Extension status", read_only=True, hidden=True)
     def get_status(self) -> dict[str, Any]:
         return {"running": self.running}

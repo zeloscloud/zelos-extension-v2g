@@ -1,18 +1,22 @@
 name = "V2G"
 version = "0.1.0"
-description = "ISO 15118 / DIN 70121 V2G (EV-charger) communication decode and pcap-to-trace conversion"
+description = "Decode ISO 15118-2 and DIN 70121 EV charging (V2G) into signals: SLAC, SDP and V2GTP messages live from a network interface, or from a pcap or pcapng capture, with its SocketCAN frames, converted to one .trz trace; message fields decode on Linux and Apple silicon macOS."
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-v2g"
+# The marketplace search and Zelos AI find an extension by these words, its name and its description.
+keywords = ["ev charging", "ev charger", "evse", "evcc", "secc", "ccs", "combined charging system", "vehicle to grid", "iso 15118", "slac", "homeplug av", "green phy", "exi", "pcap", "wireshark", "tcpdump", "charge point", "charging station", "iso 15118-2", "din70121"]
+categories = ["Automotive", "Energy", "Networking", "Diagnostics"]
 icon = "assets/icon.svg"
 readme = "README.md"
+
+[zelos]
+version = ">=26.0.10"
 
 [config]
 schema = "config.schema.json"
 
-[host]
-type = "agent"
-
-[host.agent]
+[agent]
+runtime = "python"
 entry = "main.py"
 python_version = "3.11"
 

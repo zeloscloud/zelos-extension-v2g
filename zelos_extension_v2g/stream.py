@@ -1,10 +1,8 @@
-"""Incremental V2G stream decoder — for live capture and pcap replay.
+"""Incremental V2G stream decoder, for conversion, live capture and pcap replay.
 
 Feeds scapy packets one at a time, maintaining per-stream TCP reassembly, and
 invokes callbacks as SLAC frames, SDP frames, and V2G application messages
-complete. Shares the per-frame parse helpers and record types with the batch
-decoder (:mod:`pcap`); the only difference is incremental, length-prefixed V2GTP
-framing instead of a whole-capture scan.
+complete.
 """
 
 from __future__ import annotations
