@@ -147,12 +147,14 @@ def run_live(
 ) -> None:
     """Standalone (CLI) live runner: initialize the SDK, then sniff until interrupted."""
     zelos_sdk.init(name="v2g")
-    logging.getLogger().addHandler(TraceLoggingHandler("v2g_logger"))
-    sniff_into(V2gCodec(source_name=source_name), iface=iface, replay=replay)
+    codec = V2gCodec(source_name=source_name)
+    logging.getLogger().addHandler(TraceLoggingHandler(codec.source))
+    sniff_into(codec, iface=iface, replay=replay)
 
 
 def run_decode(source_name: str = "v2g") -> None:
     """Standalone (CLI) stdin decoder: initialize the SDK, then decode a piped pcap."""
     zelos_sdk.init(name="v2g")
-    logging.getLogger().addHandler(TraceLoggingHandler("v2g_logger"))
-    decode_stream_into(V2gCodec(source_name=source_name))
+    codec = V2gCodec(source_name=source_name)
+    logging.getLogger().addHandler(TraceLoggingHandler(codec.source))
+    decode_stream_into(codec)
