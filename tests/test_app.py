@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -73,3 +75,19 @@ def test_cli_logs_record_on_the_v2g_source(monkeypatch: pytest.MonkeyPatch, run:
     getattr(live, run)(source_name="ev")
     assert len(sources) == 1
     assert sources[0] is codecs[0].source
+
+
+def test_saved_config_off_the_schema_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    saved = tmp_path / "config.json"
+    saved.write_text(json.dumps({"log_level": "LOUD"}))
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(saved))
+    monkeypatch.chdir(Path(__file__).parents[1])
+    with pytest.raises(SystemExit) as exc:
+        app.run_app_mode()
+    assert exc.value.code == 1
+    assert [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR] == [
+        "Invalid configuration: log_level: 'LOUD' is not one of "
+        "['DEBUG', 'INFO', 'WARNING', 'ERROR']"
+    ]

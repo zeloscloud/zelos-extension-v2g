@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 import signal
+import sys
 import threading
 from types import FrameType
 
 import zelos_sdk
-from zelos_sdk.extensions import load_config
+from zelos_sdk.extensions import ConfigValidationError, load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from ..codec import V2gCodec
@@ -21,7 +22,11 @@ logger = logging.getLogger(__name__)
 def run_app_mode() -> None:
     """Run the extension in agent mode: host the Convert Pcap action, and — when an
     ``interface`` or ``replay_pcap`` is configured — also capture live and stream it."""
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigValidationError as e:
+        logger.error("Invalid configuration: %s", "; ".join(m.strip(" •") for m in e.errors))
+        sys.exit(1)
     logging.getLogger().setLevel(config.get("log_level") or "INFO")
     converter = V2gConverter(config)
 
