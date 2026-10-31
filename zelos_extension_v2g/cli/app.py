@@ -30,7 +30,7 @@ def run_app_mode() -> None:
     codec = V2gCodec(source_name=config.get("source_name") or "v2g") if (iface or replay) else None
 
     zelos_sdk.actions_registry.register(converter)
-    zelos_sdk.init(name="v2g", actions=True)
+    zelos_sdk.init(name="V2G", actions=True)
 
     handler = TraceLoggingHandler("v2g_logger")
     logging.getLogger().addHandler(handler)

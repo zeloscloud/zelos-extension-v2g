@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import tomllib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -42,3 +44,13 @@ def test_log_level_defaults_to_info(agent_mode) -> None:
     logging.getLogger().setLevel(logging.DEBUG)
     agent_mode({})
     assert logging.getLogger().level == logging.INFO
+
+
+def test_actions_register_under_the_manifest_name(
+    agent_mode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    names: list[str | None] = []
+    monkeypatch.setattr(zelos_sdk, "init", lambda name=None, **_kwargs: names.append(name))
+    agent_mode({})
+    manifest = tomllib.loads((Path(__file__).parents[1] / "extension.toml").read_text())
+    assert names == [manifest["name"]]
