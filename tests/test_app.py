@@ -42,3 +42,34 @@ def test_log_level_defaults_to_info(agent_mode) -> None:
     logging.getLogger().setLevel(logging.DEBUG)
     agent_mode({})
     assert logging.getLogger().level == logging.INFO
+
+
+@pytest.mark.parametrize("config", [{}, {"replay_pcap": "capture.pcapng"}])
+def test_logs_record_on_the_v2g_source(
+    agent_mode, monkeypatch: pytest.MonkeyPatch, config: dict
+) -> None:
+    sources: list = []
+    monkeypatch.setattr(
+        app, "TraceLoggingHandler", lambda source: sources.append(source) or logging.NullHandler()
+    )
+    monkeypatch.setattr(app, "sniff_into", lambda *_args, **_kwargs: None)
+    agent_mode({"source_name": "ev", **config})
+    assert [getattr(s, "name", s) for s in sources] == ["ev"]
+
+
+@pytest.mark.parametrize("run", ["run_live", "run_decode"])
+def test_cli_logs_record_on_the_v2g_source(monkeypatch: pytest.MonkeyPatch, run: str) -> None:
+    from zelos_extension_v2g import live
+
+    sources: list = []
+    codecs: list = []
+    monkeypatch.setattr(logging.getLogger(), "handlers", list(logging.getLogger().handlers))
+    monkeypatch.setattr(zelos_sdk, "init", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        live, "TraceLoggingHandler", lambda source: sources.append(source) or logging.NullHandler()
+    )
+    monkeypatch.setattr(live, "sniff_into", lambda codec, **_kwargs: codecs.append(codec))
+    monkeypatch.setattr(live, "decode_stream_into", codecs.append)
+    getattr(live, run)(source_name="ev")
+    assert len(sources) == 1
+    assert sources[0] is codecs[0].source

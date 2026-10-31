@@ -27,13 +27,13 @@ def run_app_mode() -> None:
 
     iface = config.get("interface") or None
     replay = config.get("replay_pcap") or None
-    codec = V2gCodec(source_name=config.get("source_name") or "v2g") if (iface or replay) else None
+    source_name = config.get("source_name") or "v2g"
+    codec = V2gCodec(source_name=source_name) if (iface or replay) else None
 
     zelos_sdk.actions_registry.register(converter)
     zelos_sdk.init(name="v2g", actions=True)
 
-    handler = TraceLoggingHandler("v2g_logger")
-    logging.getLogger().addHandler(handler)
+    logging.getLogger().addHandler(TraceLoggingHandler(codec.source if codec else source_name))
 
     def shutdown_handler(signum: int, frame: FrameType | None) -> None:
         logger.info("Shutting down...")
