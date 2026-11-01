@@ -88,13 +88,15 @@ def sniff_into(
     iface: str | None = None,
     replay: str | Path | None = None,
     realtime: bool = True,
-) -> None:
+) -> bool:
     """Stream frames into ``codec``'s live source. Assumes the SDK is initialized.
 
     ``iface`` may be a single name or a comma-separated list. ``replay`` reads a
     pcap/pcapng through the identical callback path (no interface/root needed); with
     ``realtime`` the replay is paced by the capture's inter-frame deltas and stamped at
     arrival, so it appears live exactly as it happened on the wire.
+
+    Returns False when the capture stopped on an error.
     """
     try:
         if replay:
@@ -105,6 +107,7 @@ def sniff_into(
             )
             _replay_into(codec, str(replay), realtime)
         else:
+            from scapy.error import Scapy_Exception
             from scapy.sendrecv import sniff
 
             decoder = _build_decoder(codec)  # live socket already stamps real arrival time
@@ -112,9 +115,32 @@ def sniff_into(
             if iface and "," in iface:
                 ifaces = [s.strip() for s in iface.split(",")]
             logger.info("Sniffing live V2G on %s", ifaces or "(default interface)")
-            sniff(iface=ifaces, prn=decoder.feed_packet, filter=_BPF, store=False)
+            where = iface or "the default interface"
+            try:
+                sniff(iface=ifaces, prn=decoder.feed_packet, filter=_BPF, store=False)
+            except PermissionError:  # Linux's packet socket
+                logger.error(
+                    "Live capture on %s needs raw-socket rights (CAP_NET_RAW): restart the "
+                    "Zelos agent as root, or with CAP_NET_RAW as an ambient capability, then "
+                    "start the extension again",
+                    where,
+                )
+                return False
+            except Scapy_Exception as e:
+                # macOS: scapy re-raises the PermissionError of opening /dev/bpf* as this
+                if not isinstance(e.__context__, PermissionError):
+                    raise
+                logger.error(
+                    "Live capture on %s needs read and write access to /dev/bpf*: install "
+                    "Wireshark's ChmodBPF, which grants it to the access_bpf group, add this user "
+                    "to that group, quit and reopen Zelos, then start the extension again",
+                    where,
+                )
+                return False
     except Exception:
         logger.exception("V2G live capture stopped on error")
+        return False
+    return True
 
 
 def decode_stream_into(codec: V2gCodec, source=None) -> None:

@@ -25,6 +25,7 @@ class V2gConverter:
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self.config = config or {}
         self.running = False
+        self.capture_failed = False  # live capture stopped on an error; the actions still run
 
     def start(self) -> None:
         logger.info("V2G converter ready (idle; use the Convert Pcap action)")
@@ -91,4 +92,4 @@ class V2gConverter:
 
     @zelos_sdk.action("Get Status", "Extension status", read_only=True)
     def get_status(self) -> dict[str, Any]:
-        return {"running": self.running}
+        return {"running": self.running and not self.capture_failed}
