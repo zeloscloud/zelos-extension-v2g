@@ -104,7 +104,8 @@ zelos live query -s '*/v2g/current_demand_req.ev_target_current' --last 30s
 Standalone (no agent): `uv run python main.py live --iface eth0` or `--replay file.pcap`.
 
 > Live capture needs raw-socket permission. On a permissioned Linux deploy `interface=`
-> works directly; on macOS the agent runs non-root, so use `replay_pcap` there.
+> works directly. On macOS, live capture needs read and write access to `/dev/bpf*`
+> (Wireshark's ChmodBPF and the `access_bpf` group); otherwise use `replay_pcap`.
 
 ### Live from a remote bench (pipe / SSH)
 

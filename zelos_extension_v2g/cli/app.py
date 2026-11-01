@@ -48,14 +48,13 @@ def run_app_mode() -> None:
     signal.signal(signal.SIGINT, shutdown_handler)
 
     if codec is not None:
+
+        def capture() -> None:
+            if not sniff_into(codec, iface=iface, replay=replay):
+                converter.capture_failed = True
+
         # Sniff on a background thread; the main thread keeps serving actions.
-        threading.Thread(
-            target=sniff_into,
-            args=(codec,),
-            kwargs={"iface": iface, "replay": replay},
-            daemon=True,
-            name="v2g-live",
-        ).start()
+        threading.Thread(target=capture, daemon=True, name="v2g-live").start()
         logger.info("V2G live capture started (interface=%s, replay=%s)", iface, replay)
 
     logger.info("Starting V2G extension")

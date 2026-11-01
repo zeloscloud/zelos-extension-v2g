@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import zelos_sdk
+from scapy.error import Scapy_Exception
 
 from zelos_extension_v2g.cli import app
 from zelos_extension_v2g.extension import V2gConverter
+
+FIXTURE = Path(__file__).parent / "files" / "2024-04-20_ModelY_pyPLC_stop_in_precharge.pcapng"
 
 
 @pytest.fixture
@@ -91,3 +95,94 @@ def test_saved_config_off_the_schema_exits(
         "Invalid configuration: log_level: 'LOUD' is not one of "
         "['DEBUG', 'INFO', 'WARNING', 'ERROR']"
     ]
+
+
+def _converter(agent_mode, monkeypatch: pytest.MonkeyPatch, config: dict) -> V2gConverter:
+    """The converter agent mode starts with `config`, once its live capture thread has ended."""
+    converters: list[V2gConverter] = []
+    monkeypatch.setattr(V2gConverter, "run", lambda self: converters.append(self))
+    agent_mode(config)
+    for thread in threading.enumerate():
+        if thread.name == "v2g-live":
+            thread.join(5)
+    (converter,) = converters
+    return converter
+
+
+def test_get_status_runs_without_live_capture(agent_mode, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _converter(agent_mode, monkeypatch, {}).get_status() == {"running": True}
+
+
+class NoPacketSocket:
+    """Linux's packet socket without CAP_NET_RAW."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+
+class NoBpfAccess:
+    """scapy's BPF socket (macOS) when this user may not open /dev/bpf*: its `get_dev_bpf`
+    turns the PermissionError into a Scapy_Exception."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        try:
+            raise PermissionError(13, "Permission denied", "/dev/bpf0")
+        except OSError as e:
+            raise Scapy_Exception(
+                "Permission denied: could not open /dev/bpf0. "
+                "Make sure to be running Scapy as root ! (sudo)"
+            ) from e
+
+
+class NoBpfDevice:
+    """scapy's BPF socket when every /dev/bpf* is busy: not a permission error."""
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        raise Scapy_Exception("No /dev/bpf handle is available !")
+
+
+@pytest.mark.parametrize(
+    ("socket", "error"),
+    [
+        (
+            NoPacketSocket,
+            "Live capture on {iface} needs raw-socket rights (CAP_NET_RAW): restart the Zelos "
+            "agent as root, or with CAP_NET_RAW as an ambient capability, then start the extension "
+            "again",
+        ),
+        (
+            NoBpfAccess,
+            "Live capture on {iface} needs read and write access to /dev/bpf*: install "
+            "Wireshark's ChmodBPF, which grants it to the access_bpf group, add this user to that "
+            "group, quit and reopen Zelos, then start the extension again",
+        ),
+        (NoBpfDevice, None),
+    ],
+    ids=["linux", "macos", "other error"],
+)
+def test_live_capture_without_capture_rights(
+    agent_mode,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    socket: type,
+    error: str | None,
+) -> None:
+    """The OS refuses the capture socket: one ERROR line says what is missing and how to grant
+    it, Get Status reports not running, and Convert Pcap still converts. Any other capture
+    error keeps its traceback."""
+    from scapy.config import conf
+
+    monkeypatch.setattr(conf, "L2listen", socket)
+    converter = _converter(agent_mode, monkeypatch, {"interface": conf.loopback_name})
+    errors = [(r.getMessage(), r.exc_info) for r in caplog.records if r.levelno >= logging.ERROR]
+    if error is None:
+        assert [(message, info[0]) for message, info in errors] == [
+            ("V2G live capture stopped on error", Scapy_Exception)
+        ]
+    else:
+        assert errors == [(error.format(iface=conf.loopback_name), None)]
+    assert converter.get_status() == {"running": False}
+    trz = tmp_path / "session.trz"
+    assert converter.convert_pcap(str(FIXTURE), str(trz))["status"] == "success"
+    assert trz.exists()
