@@ -100,3 +100,15 @@ run:
 # Update uv.lock after changing dependencies
 lock:
     uv lock
+
+# Replay the bundled demo capture once
+demo:
+    uv run python main.py --demo
+
+# List capturable interfaces
+interfaces:
+    uv run python main.py interfaces
+
+# Probe capture permissions and print remediation
+check-permissions:
+    uv run python main.py check

@@ -1,171 +1,136 @@
 # V2G
 
-> Decode ISO 15118 / DIN 70121 EV-charging communication (and any SocketCAN traffic in
-> the same capture) into Zelos traces — from a packet capture or live off the wire.
+See what an electric vehicle and a charger say to each other, as signals in your Zelos workspace.
 
-A [Zelos](https://zeloscloud.io) agent extension. It turns the V2G conversation
-between an electric vehicle (EVCC) and a charger (SECC) into plottable, queryable
-signals and a searchable message timeline — the same data you would read in Wireshark
-with the dsV2Gshark plugin, but as first-class Zelos traces you can plot, correlate
-with other signals, query from the CLI, and share as a `.trz`.
+- **Every message, by name**: `CurrentDemandReq`, `DC_ChargeLoopRes`, `ChargeParameterDiscoveryRes`, ... each an event with its fields under their standard names, units and value tables
+- **The whole link**: SLAC pairing, SDP discovery and the V2GTP message timeline, in order, one row per frame
+- **DIN 70121, ISO 15118-2, ISO 15118-20**: DC and AC, the protocol picked per session from its handshake
+- **TLS sessions**: decoded like cleartext ones when the charger or vehicle under test discloses its session secrets
+- **Live or from a file**: capture on a network interface, or open a `.pcap`/`.pcapng`, plain or gzip/zstd compressed
+- **One timeline**: charging messages line up with your CAN, power and sensor data
+- **Demo**: a bundled DC charging session, for trying it without a charging link
 
-It also decodes **CAN** frames captured alongside V2G (Wireshark/tcpdump on a SocketCAN
-interface). A capture carrying **both** — e.g. a bench recording of a charging session
-next to the vehicle bus — converts to **one time-aligned `.trz`** with `can*/*` and
-`v2g/*` on the same clock, so you can correlate the CAN bus with the charging handshake.
+Listen-only: the extension never sends on the link.
 
-## What it decodes
+## Quick start
 
-Decode is layered, so you get useful output even on captures the EXI codec can't fully
-parse:
+In the app:
 
-**Layer 1 — transport & pairing (always on, pure-Python):**
-- **SLAC** HomePlug AV pairing handshake (ISO 15118-3) — every MME, in order, typed by
-  its MMTYPE name (e.g. `CM_SLAC_PARM.REQ`, `CM_ATTEN_CHAR.IND`, `CM_SLAC_MATCH.CNF`)
-  with source/destination MAC and the raw frame bytes retained per row. Frames that
-  carry decodable fields are decoded per-frame: `CM_ATTEN_CHAR.IND` → the link
-  attenuation profile (per-group dB), `CM_SLAC_MATCH.CNF` → the matched NID/NMK. SLAC
-  bring-up is the most common field failure, so the full handshake is on the timeline.
-- **SDP** SECC discovery — the resolved charger IP/port, security, and transport.
-- **V2GTP** message timeline — every application message with direction, length, and
-  raw EXI retained per row.
+1. **Install** V2G from the Extensions view
+2. **Configure**: add an interface and pick the NIC that sees the charging link (a tap, a bridge, or the powerline modem's Ethernet side)
+3. **Save & Start**
+4. **Plot**: messages appear under **V2G → your interface**; drag `CurrentDemandRes → EVSEPresentVoltage` into the workspace
 
-Every event corresponds to a frame on the wire and its decoded fields — the extension
-does not synthesize cross-frame "session health" summaries or roll-ups.
+Live capture needs a one-time grant on the machine running the agent ([below](#granting-capture-rights)). Decoding a file needs nothing.
 
-**Layer 2 — application message field decode (via bundled libcbv2g):**
-- **DIN 70121** and **ISO 15118-2** DC/AC sessions: each message type becomes its own
-  event whose fields are the standard signals — SoC, target/present voltage & current,
-  EVSE ratings, response codes, processing state, EVSE ID, and so on.
-- **supportedAppProtocol (SAP)** handshake — the negotiated protocol and version, which
-  also sets the session's dialect authoritatively.
-
-Each decoded field carries its real unit (V, A, %, W, Wh) and enum value tables
-(response codes, EVSE status), so plots and queries read in engineering terms.
-
-**CAN (SocketCAN, in the same capture):**
-- **Raw frames (always):** every SocketCAN frame becomes a `can_raw/*` row — arbitration
-  id, flags, dlc, and raw data bytes, as seen on the bus (the `candump` view).
-- **Decoded signals (with a `.dbc`):** pass `--dbc vehicle.dbc` and matching frames also
-  decode into named `can_codec/<id>_<message>` signal events — with units, scaling, value
-  tables, and multiplexing — using the shared Rust `zelos-can` codec.
-
-> Not yet wired (the codec supports them; deferred until needed): ISO 15118-20, and
-> TLS-encrypted / Plug & Charge certificate sessions. Captures using these still decode
-> at Layer 1 and for any cleartext messages.
-
-## Install
+From the CLI, on the agent that can see the link:
 
 ```bash
-zelos extensions install-local /path/to/zelos-extension-v2g
+zelos extensions install zeloscloud/zelos-extension-v2g
+zelos extensions start zeloscloud.zelos-extension-v2g --config '{"interfaces": [{"interface": "eth0"}]}'
 ```
 
-No compiler or extra system packages are required — the EXI codec ships prebuilt and is
-loaded via stdlib `ctypes` (see [Architecture](#architecture)).
-
-## Usage
-
-### Convert a capture (offline)
+Decoding a file instead plays it once at the capture's pace, then the extension exits:
 
 ```bash
-# V2G / CAN / both — auto-detected per frame
-uv run python main.py convert session.pcapng -o session.trz
-
-# decode CAN signals too (raw CAN frames are always kept). A ready-made combined
-# CAN+V2G example ships in tests/files/ (see tests/files/README.md):
-uv run python main.py convert tests/files/combined_can_v2g.pcapng \
-  --dbc tests/files/example.dbc -o session.trz
-
-# or as an agent action: "Convert Pcap"
+zelos extensions start zeloscloud.zelos-extension-v2g --config '{"advanced": {"replay_pcap": "session.pcapng"}}'
 ```
 
-Accepts `.pcap` and `.pcapng`. A capture with both CAN and V2G produces one time-aligned
-trace. Open the resulting `.trz` in the Zelos app, or query it:
+To turn a file into a `.trz` with the capture's own timestamps, run the `V2G/convert_pcap` action or `uv run zelos-extension-v2g convert session.pcapng`.
+
+## Try it without hardware
+
+One ISO 15118-2 DC session ships with the extension, SDP to SessionStop, recorded between a software-in-the-loop charger and vehicle.
+
+- **App**: run `V2G/demo_capture_path`, paste the path into **Advanced → Replay PCAP File**, save, start
+- **CLI**: `uv run zelos-extension-v2g --demo`
+
+Either way it plays once and the extension exits.
+
+## What you get
+
+Everything lands under the **Prefix** source (default `V2G`), one branch per interface or file.
+
+| Event | One row per | Fields |
+| --- | --- | --- |
+| `<name>/<Message>` | decoded message of that type | `session_id`, `protocol`, the header's fault and signature fields, then the message's fields under their schema names (`EVSEPresentVoltage`, `EVTargetCurrent`, `EVRESSSOC`, `ResponseCode`, ...) |
+| `<name>/v2gtp` | V2GTP message | `direction`, `protocol`, `message`, `session_id`, `payload_type`, `length`, the EXI payload, `decode_error` |
+| `<name>/sdp` | SDP request or response | `kind`, `secc_ip`, `secc_port`, `security`, `transport` |
+| `<name>/slac` | HomePlug AV management frame | `name` (`CM_SLAC_PARM.REQ`, ...), `run_id`, sounds and attenuation, the matched EV and EVSE MAC addresses |
+| `<name>/packets`, `<name>/stats` | captured frame, capture tick | addresses, ports, protocol, length, the first bytes of the frame; capture counters |
+| `<name>/can/<iface>` | SocketCAN frame in a capture file | `arbitration_id`, `dlc`, `data`, flags |
+
+- the event time is the capture time of the frame that completed the message
+- a message several protocols share (`SessionSetupReq`, `PowerDeliveryReq`, ...) is one event; `protocol` says which sent the row
+- physical values are scaled floats with their unit; enumerations are codes with value tables
+- certificates, private keys and the SLAC network key are never recorded; `*_len` and `num_*` fields give their sizes and counts
+- CAN frames in a capture are raw rows; signal decode from a DBC is the CAN extension's
+
+## TLS sessions
+
+A charger or vehicle under test can disclose its TLS session secrets, as test systems do. With them a TLS 1.2 or TLS 1.3 session decodes to the same rows as a cleartext one.
+
+- **On the link**: an endpoint that sends its key log lines as UDP datagrams needs no configuration
+- **From a file**: set **TLS Key Log File** to the key log file (NSS key log format) the endpoint writes. A live capture follows the file as it grows; a replay reads it once. `convert_pcap` and the `convert` command take the file as their own argument
+
+Secrets are used in memory to derive keys and never appear in a decoded row, counter or log line. The raw `packets` rows are the capture as captured: when an endpoint discloses secrets on the link, those datagrams are in `packets` like any other frame. Treat a trace of such a link as you would the key log itself.
+
+## Granting capture rights
+
+Capturing reads raw frames, which needs one grant per machine. Decoding a file does not.
 
 ```bash
-zelos trace signals session.trz                 # list decoded signals
-zelos trace query  session.trz -s '*/v2g/current_demand_res.evse_present_voltage'
+uv run zelos-extension-v2g check        # when denied, prints the exact command for this machine
+sudo /path/to/python -m zelos_packet install-helper
 ```
 
-### Live capture
+- **Linux** installs a small capture helper holding `cap_net_raw` only, and a `zelos-packet` group; **macOS** puts `/dev/bpf*` in the `access_bpf` group
+- log out and back in, then restart the agent: a session's groups are fixed at login
+- `python -m zelos_packet status` says whether capture would work right now
+- **Windows**: `check` names the capture driver to install
 
-Configure the extension with an `interface` to sniff a bridged green-PHY link, or a
-`replay_pcap` to stream a capture through the live path (handy for testing without
-hardware). Decoded signals stream to the agent in real time:
+A failed start says the same in the extension log. While the extension runs, `V2G/check_permissions` reports it too.
+
+## Settings
+
+| Setting | Default | |
+| --- | --- | --- |
+| `interfaces[].interface` | | NIC that sees the charging link |
+| `interfaces[].name` | interface name | Names this interface's branch in the tree |
+| `tls_keylog` | | Key log file with the TLS session secrets, for live capture and replay |
+| `advanced.prefix` | `V2G` | Trace source the rows land under |
+| `advanced.promiscuous` | `true` | Receive frames addressed to other stations, as a tap or bridge needs |
+| `advanced.replay_pcap` | | Decode this `.pcap`/`.pcapng` (plain or `.gz`/`.zst`) instead of capturing; plays once, then exits. `interfaces` is ignored |
+| `advanced.log_level` | `INFO` | |
+
+If any configured interface cannot be opened, the start fails with the reason in the log.
+
+## Actions
+
+| Action | |
+| --- | --- |
+| `V2G/list_interfaces` | NICs on the machine running the agent |
+| `V2G/check_permissions` | Can we capture? If not, the exact fix |
+| `V2G/get_status` | Per-interface capture and decoder counters: packets, drops, messages decoded, TLS sessions decrypted |
+| `V2G/convert_pcap` | Convert a capture to `.trz`, optionally with a TLS key log. Runs without the extension started |
+| `V2G/demo_capture_path` | Path of the bundled demo capture, for `advanced.replay_pcap`. Runs without the extension started |
+
+## CLI
 
 ```bash
-zelos extensions start local.v2g \
-  --config '{"interface": "eth0", "source_name": "v2g"}'
-
-zelos live signals
-zelos live query -s '*/v2g/current_demand_req.ev_target_current' --last 30s
+uv run zelos-extension-v2g interfaces                             # list NICs
+uv run zelos-extension-v2g check                                  # probe permissions
+uv run zelos-extension-v2g capture eth0 --tls-keylog keys.log     # capture, no app config
+uv run zelos-extension-v2g replay session.pcapng                  # stream a file to the agent once, paced
+uv run zelos-extension-v2g convert session.pcapng.gz              # write session.trz, no agent needed
+uv run zelos-extension-v2g --demo                                 # the bundled capture, played once
 ```
 
-Standalone (no agent): `uv run python main.py live --iface eth0` or `--replay file.pcap`.
-
-> Live capture needs raw-socket permission. On a permissioned Linux deploy `interface=`
-> works directly. On macOS, live capture needs read and write access to `/dev/bpf*`
-> (Wireshark's ChmodBPF and the `access_bpf` group); otherwise use `replay_pcap`.
-
-### Live from a remote bench (pipe / SSH)
-
-The network analog of `candump | cantools decode`: pipe a capture tool's pcap stream
-straight into `decode` over stdin — no files, decodes as it arrives. Ideal for a remote
-charger/HIL where you can't run the agent:
-
-```bash
-ssh root@charger-bench \
-  "tcpdump -i eth0 -U -s0 -w - 'ip6 or ether proto 0x88e1'" \
-  | uv run python main.py decode
-```
-
-The signals appear live in the Zelos app exactly as on the bench. Notes:
-- **Filter** must keep all three layers — `'ip6 or ether proto 0x88e1'` (SDP+V2GTP over
-  IPv6, SLAC over HomePlug AV). Don't filter on `tcp` alone or you lose SLAC and SDP.
-- **Interface**: `-i eth0` (Ethernet) and `-i any` (Linux cooked / SLL) both decode.
-- `-U` (unbuffered) makes it stream in real time rather than in blocks.
-
-## Configuration
-
-| Field         | Purpose                                                            |
-|---------------|-------------------------------------------------------------------|
-| `interface`   | Network interface(s) to sniff live (comma-separated for several). |
-| `replay_pcap` | A pcap/pcapng to replay through the live path instead of sniffing.|
-| `source_name` | Trace source name (default `v2g`).                                |
-| `log_level`   | `DEBUG` / `INFO` / `WARNING` / `ERROR`.                           |
-
-## Architecture
-
-V2G application messages are **EXI** (schema-informed binary XML). Rather than
-reimplement an EXI codec, the extension reuses EVerest's
-[`libcbv2g`](https://github.com/EVerest/libcbv2g) (Apache-2.0) — the reference DIN /
-ISO 15118 codec — through a thin C shim (`native/v2g_din_shim.c`) that decodes one
-message to compact JSON. The shim is statically linked into a single self-contained
-shared library, **prebuilt per platform and committed** under
-`zelos_extension_v2g/exi/_lib/`. The Python side is pure (`ctypes` is stdlib), so
-install needs no toolchain and publishes no wheels; if no artifact exists for the
-running platform, decode degrades gracefully to Layer 1.
-
-Capture parsing uses [scapy](https://scapy.net) (pcap + pcapng); V2GTP framing, TCP
-reassembly, and SLAC body decode are pure-Python. The offline converter and the live
-path share one codec, so they emit identical schemas.
-
-CAN frames are decoded by the shared [`zelos-can`](https://pypi.org/project/zelos-can/)
-codec (raw logging + DBC signal decode, in Rust) — the same engine as the standalone
-Zelos CAN extension, so decoded signals are consistent across both. This extension only
-adds the SocketCAN pcap parsing and routes frames to it.
-
-To rebuild the native shim for a platform: `bash native/build.sh` (needs `cmake`, a C
-compiler, and `git`). See [`native/README.md`](native/README.md).
+`capture`, `replay` and `convert` take `--tls-keylog` and `--prefix`.
 
 ## Links
 
-- [Repository](https://github.com/zeloscloud/zelos-extension-v2g)
+- [Documentation](https://docs.zeloscloud.io)
 - [Issues](https://github.com/zeloscloud/zelos-extension-v2g/issues)
-- [Zelos Documentation](https://docs.zeloscloud.io)
-- [SDK Guide](https://docs.zeloscloud.io/latest/sdk/)
 
-## License
-
-MIT License — see [LICENSE](LICENSE) for details. Bundles EVerest `libcbv2g`
-(Apache-2.0).
+MIT. See [LICENSE](LICENSE).

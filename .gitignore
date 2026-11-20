@@ -13,6 +13,13 @@ dist/
 *.tar.gz
 actions.json
 
+# Captures and traces. The bundled demo capture and the test fixture are the exceptions.
+*.pcap
+*.pcapng
+*.trz
+!zelos_extension_v2g/demo/v2g-demo.pcap
+!tests/files/iso2-tls.pcap
+
 # Editors and OS
 .DS_Store
 .idea/
@@ -21,9 +28,3 @@ actions.json
 # Local environment
 .env
 .envrc
-
-# Zelos
-config.json
-
-# Native shim build scratch
-native/.build/
