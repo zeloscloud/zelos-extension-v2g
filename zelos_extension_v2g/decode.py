@@ -18,8 +18,10 @@ from . import pkg
 #: First zelos-packet release that decodes ISO 15118-20 and TLS sessions.
 MIN_PACKET_VERSION = "0.0.7"
 
-#: `zelos_packet.Metrics` counters the V2G decoder adds.
+#: `zelos_packet.Metrics` counters reported: rows the trace refused, then the V2G decoder's.
 COUNTERS = (
+    "emit_errors",
+    "flush_errors",
     "v2g_slac_frames",
     "v2g_slac_malformed",
     "v2g_sdp_frames",
@@ -35,6 +37,26 @@ COUNTERS = (
     "v2g_tls_connections",
     "v2g_tls_decrypted",
     "v2g_tls_secrets_seen",
+    "v2g_tls_no_secret",
+    "v2g_tls_no_handshake",
+    "v2g_tls_unsupported",
+    "v2g_tls_auth_failures",
+    "v2g_tls_buffer_overflow",
+)
+
+#: Capture and decoder counters that, non-zero, mean traffic was lost or seen and not decoded.
+PROBLEMS = (
+    "kernel_drops",
+    "packets_dropped_agent",
+    "read_errors",
+    "emit_errors",
+    "flush_errors",
+    "v2g_slac_malformed",
+    "v2g_undecoded",
+    "v2g_framing_errors",
+    "v2g_oversize",
+    "v2g_tcp_gaps",
+    "v2g_streams_evicted",
     "v2g_tls_no_secret",
     "v2g_tls_no_handshake",
     "v2g_tls_unsupported",
@@ -99,6 +121,22 @@ def require() -> None:
         raise RuntimeError(
             f"V2G decode needs zelos-packet>={MIN_PACKET_VERSION}; installed {installed_version()}"
         )
+
+
+def health(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """`status`, and a `message` unless it is success, for counter rows: error
+    when a capture has ended, warning when a `PROBLEMS` counter is non-zero."""
+    ended = [str(r["name"]) for r in rows if not r.get("running", True)]
+    if ended:
+        return {
+            "status": "error",
+            "message": f"Capture ended on {', '.join(ended)}: see its 'error' and the "
+            "extension log. Restart the extension to capture again.",
+        }
+    bad = [f"{r['name']} {k}={r[k]}" for r in rows for k in PROBLEMS if r.get(k)]
+    if bad:
+        return {"status": "warning", "message": f"Traffic lost or not decoded: {', '.join(bad)}."}
+    return {"status": "success"}
 
 
 def counters(metrics: Any) -> dict[str, int]:

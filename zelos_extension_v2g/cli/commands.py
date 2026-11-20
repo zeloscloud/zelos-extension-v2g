@@ -213,3 +213,5 @@ def convert_cmd(
         f"{result['input_file']} -> {result['output_file']} "
         f"({result['packets']:,} packets, {result['v2g_decoded']:,} V2G messages decoded)"
     )
+    if "message" in result:
+        click.echo(result["message"], err=True)

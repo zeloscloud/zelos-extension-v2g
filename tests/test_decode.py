@@ -13,7 +13,7 @@ from zelos_extension_v2g import actions, decode, pkg
 from zelos_extension_v2g.capture import CaptureSession, InterfaceConfig
 from zelos_extension_v2g.demo import DEMO_PCAP
 
-from .conftest import FILES, FakeCapture, needs_real_packet
+from .conftest import FILES, FakeCapture
 
 
 class TestRequire:
@@ -31,7 +31,6 @@ class TestRequire:
             decode.require()
 
 
-@needs_real_packet
 class TestInstalledWheel:
     def test_every_counter_and_keyword_exists_in_the_installed_wheel(self):
         import zelos_packet
@@ -46,7 +45,11 @@ class TestInstalledWheel:
         pcap = Path(shutil.copy(DEMO_PCAP, tmp_path / DEMO_PCAP.name))
         result = actions.convert_pcap(str(pcap))
         assert Path(result["output_file"]) == tmp_path / "v2g-demo.trz"
-        assert (result["packets"], result["v2g_sdp_frames"]) == (155, 2)
+        assert (result["status"], result["packets"], result["v2g_sdp_frames"]) == (
+            "success",
+            155,
+            2,
+        )
         assert result["v2g_messages"] == result["v2g_decoded"] == 68
         assert (
             result["v2g_undecoded"] == result["v2g_framing_errors"] == result["v2g_tcp_gaps"] == 0
@@ -56,7 +59,7 @@ class TestInstalledWheel:
         pcap = FILES / "iso2-tls.pcap"
         opaque = actions.convert_pcap(str(pcap), str(tmp_path / "opaque.trz"))
         assert (opaque["v2g_tls_connections"], opaque["v2g_tls_no_secret"]) == (1, 1)
-        assert opaque["v2g_messages"] == 0
+        assert (opaque["status"], opaque["v2g_messages"]) == ("warning", 0)
         clear = actions.convert_pcap(
             str(pcap), str(tmp_path / "clear.trz"), tls_keylog=str(FILES / "iso2-tls.keys")
         )

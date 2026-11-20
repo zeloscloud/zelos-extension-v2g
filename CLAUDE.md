@@ -32,7 +32,7 @@ this extension is the configuration, actions and CLI around it.
   the supervisor does not restart, so that line is the user's whole experience.
 - **No capture filter.** The agent's own traffic is excluded by the package default. The decoder
   needs SLAC (0x88E1), SDP and V2G over either IP version, and key log datagrams on any UDP port.
-- **Secrets.** A key log path is passed through, never read or logged here.
+- **Secrets.** A key log path is passed through and logged; the file is never read here.
 
 ## Testing
 

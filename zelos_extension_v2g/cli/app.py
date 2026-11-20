@@ -117,10 +117,11 @@ def _install_replay_shutdown() -> None:
 def run_sessions(
     configs: list[InterfaceConfig], prefix: str, *, promiscuous: bool, v2g: V2gConfig
 ) -> None:
-    """Start every live session, wait for shutdown, then stop them in reverse order.
+    """Start every live session, wait for shutdown, then stop them together.
 
     One interface that fails to open fails the whole start: the ones already
-    open are stopped on the way out. Returning normally (rather than
+    open are stopped on the way out. A capture that ends while running is one
+    ERROR line; the rest keep capturing. Returning normally (rather than
     `os._exit`) matters: the SDK's atexit hook drains the trace namespace and
     blocks until every queued event is delivered.
     """
@@ -138,11 +139,19 @@ def run_sessions(
         )
         # Polled: on Windows a bare wait() is not interrupted by Ctrl+C, the
         # agent's stop signal, so the handler would never run.
+        ended: set[str] = set()
         while not stop_event.wait(0.5):
-            pass
+            for session in started:
+                if session.name not in ended and (reason := session.failure()):
+                    ended.add(session.name)
+                    logger.error("Capture on %s ended: %s", session.config.interface, reason)
     finally:
-        for session in reversed(started):
-            session.stop()
+        # Together: each stop is bounded (~3s), so the whole stop is, whatever the count.
+        stops = [threading.Thread(target=session.stop) for session in started]
+        for thread in stops:
+            thread.start()
+        for thread in stops:
+            thread.join()
         v2g_actions.CAPTURES.clear()
 
 
@@ -193,7 +202,7 @@ def run_app_mode(demo_flag: bool, file: Path | None) -> None:
     if not replay and not interfaces:
         _fail(
             "Nothing to do: no interfaces are configured and no replay file is set. "
-            "Add an interface (run the 'List interfaces' action to see what this "
+            "Add an interface (run the 'List Interfaces' action to see what this "
             "machine has), or set 'Replay PCAP File' to decode a capture instead."
         )
 

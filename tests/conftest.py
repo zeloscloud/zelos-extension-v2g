@@ -2,7 +2,6 @@
 without a socket or an agent.
 
 Decode correctness is not tested here; it lives with the decoder in zelos-packet.
-Tests that need the real wheel use ``needs_real_packet``.
 """
 
 from __future__ import annotations
@@ -167,8 +166,3 @@ def fake_packet(monkeypatch) -> SimpleNamespace:
     monkeypatch.setattr(pkg, "available", lambda: True)
     monkeypatch.setattr(capture_mod, "make_trace_source", FakeTraceSource)
     return module
-
-
-needs_real_packet = pytest.mark.skipif(
-    not pkg.available(), reason=pkg.skip_reason() or "zelos-packet unavailable"
-)
