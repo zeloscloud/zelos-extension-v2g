@@ -7,7 +7,7 @@ repository = "https://github.com/zeloscloud/zelos-extension-v2g"
 # author and repository. Zelos AI sees the name, description and keywords, not the categories.
 keywords = ["ev charging", "ev charger", "evse", "evcc", "secc", "ccs", "combined charging system", "vehicle to grid", "iso 15118", "slac", "homeplug av", "green phy", "exi", "pcap", "wireshark", "tcpdump", "charge point", "charging station", "iso 15118-2", "din70121"]
 categories = ["Automotive", "Energy", "Networking", "Diagnostics"]
-icon = "assets/icon.svg"
+icon = "assets/icon.png"
 readme = "README.md"
 
 [zelos]
