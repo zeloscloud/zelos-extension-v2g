@@ -36,6 +36,7 @@ STATS_FIELDS = (
     "bytes_read",
     "packets_truncated",
     "kernel_drops",
+    "packets_dropped_agent",
     "decode_stall_ms",
     "read_errors",
 )
@@ -99,7 +100,7 @@ def parse_interfaces(config: dict) -> list[InterfaceConfig]:
         interface = str(entry.get("interface") or "").strip()
         if not interface:
             raise ConfigError(
-                f"interfaces[{index}] is missing 'interface'. Run the 'List interfaces' "
+                f"interfaces[{index}] is missing 'interface'. Run the 'List Interfaces' "
                 "action to see the interfaces on the machine running the agent."
             )
 
@@ -294,6 +295,13 @@ class CaptureSession:
             **decode.counters(cap.metrics()),
         }
 
+    def failure(self) -> str | None:
+        """Why a started capture is no longer running, or None while it is."""
+        cap = self._capture
+        if cap is None or getattr(cap, "is_active", True):
+            return None
+        return getattr(cap, "error", None) or "the capture helper exited"
+
     def stop(self) -> None:
         """``PacketCapture.stop()`` is bounded (~3s): it signals the helper,
         which drains and hands everything to the agent, then reaps it."""
@@ -400,8 +408,10 @@ def probe_permissions(interface: str | None = None) -> dict[str, Any]:
             return denied(str(exc), interface, remediation="")
 
     target = interface
+    candidates = list_interfaces()
+    if target and target not in {i["name"] for i in candidates}:
+        return denied(f"Interface {target!r} was not found on this machine.", target, "")
     if not target:
-        candidates = list_interfaces()
         pool = [i for i in candidates if i["is_up"] and not i["is_loopback"]] or candidates
         if not pool:
             return denied("No network interfaces were reported by zelos-packet")

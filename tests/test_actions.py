@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from zelos_sdk.actions import ActionsRegistry
 
-from zelos_extension_v2g import actions, decode
+from zelos_extension_v2g import actions
 from zelos_extension_v2g import capture as capture_mod
 from zelos_extension_v2g.capture import CaptureSession, InterfaceConfig, replay_pcap
 from zelos_extension_v2g.demo import DEMO_PCAP
 
-from .conftest import FakeDecoder
+from .conftest import FakeCapture, FakeDecoder
 
 
 def test_actions_register_under_their_bare_names_and_flags_are_pinned():
@@ -36,16 +38,30 @@ def test_get_status_reports_nothing_running():
     assert actions.get_status()["status"] == "warning"
 
 
-def test_status_over_a_running_capture_carries_every_v2g_counter(fake_packet):
+def test_status_says_when_a_capture_dropped_frames_or_ended(fake_packet, monkeypatch):
     session = CaptureSession(InterfaceConfig("en0", "en0"), "V2G")
     session.start()
     actions.CAPTURES.clear()
     actions.CAPTURES["en0"] = session
     try:
-        [status] = actions.get_status()["interfaces"]
-        assert status["running"] and status["packets_read"] == 12
-        assert (status["v2g_decoded"], status["v2g_tls_connections"]) == (8, 1)
-        assert set(decode.COUNTERS) <= set(status)
+        result = actions.get_status()
+        [status] = result["interfaces"]
+        assert result["status"] == "success" and status["running"]
+        assert (status["packets_read"], status["v2g_decoded"]) == (12, 8)
+
+        dropped = SimpleNamespace(packets_read=12, kernel_drops=3)
+        monkeypatch.setattr(FakeCapture, "stats", lambda self: dropped)
+        result = actions.get_status()
+        assert (result["status"], result["message"]) == (
+            "warning",
+            "Traffic lost or not decoded: en0 kernel_drops=3.",
+        )
+
+        monkeypatch.setattr(FakeCapture, "is_active", False)
+        monkeypatch.setattr(FakeCapture, "error", "helper killed")
+        assert session.failure() == "helper killed"
+        result = actions.get_status()
+        assert result["status"] == "error" and "en0" in result["message"]
     finally:
         actions.CAPTURES.clear()
         session.stop()

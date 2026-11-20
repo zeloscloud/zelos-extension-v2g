@@ -137,7 +137,8 @@ def check_permissions(interface: str = "") -> dict[str, Any]:
     "v2g_tls_secrets_seen, v2g_tls_no_secret, v2g_tls_no_handshake, "
     "v2g_tls_auth_failures. kernel_drops climbing means the kernel buffer is too "
     "small; v2g_tls_no_secret above zero means a TLS session's secrets were not "
-    "disclosed.",
+    "disclosed. status is error when a capture has ended, and warning when a loss "
+    "or decode-failure counter is above zero.",
     read_only=True,
 )
 def get_status() -> dict[str, Any]:
@@ -147,7 +148,7 @@ def get_status() -> dict[str, Any]:
             {"name": n, "running": True, **decode.counters(d.metrics())}
             for n, d in sorted(capture_mod.REPLAYS.items())
         ]
-        return {"status": "success", "interfaces": rows}
+        return {**decode.health(rows), "interfaces": rows}
     if not CAPTURES:
         return {
             "status": "warning",
@@ -155,7 +156,8 @@ def get_status() -> dict[str, Any]:
             "the extension.",
             "interfaces": [],
         }
-    return {"status": "success", "interfaces": [CAPTURES[k].status() for k in sorted(CAPTURES)]}
+    rows = [CAPTURES[k].status() for k in sorted(CAPTURES)]
+    return {**decode.health(rows), "interfaces": rows}
 
 
 @action(

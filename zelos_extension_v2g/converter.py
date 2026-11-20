@@ -15,7 +15,7 @@ from typing import Any
 
 from .capture import make_decoder
 from .constants import DEFAULT_PREFIX
-from .decode import V2gConfig, counters
+from .decode import V2gConfig, counters, health
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ def convert_pcap(
 
     logger.info("Converted %s: %d packets -> %s", source.name, packets, destination)
     return {
-        "status": "success",
+        **health([{"name": source.name, **decoded}]),
         "input_file": str(source),
         "output_file": str(destination),
         "packets": packets,
