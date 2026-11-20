@@ -1,183 +1,113 @@
-"""Convert a capture (.pcap/.pcapng) to a Zelos trace (.trz).
+"""pcap -> .trz conversion, shared by the `convert` CLI command and the
+`Convert Pcap` action so the two surfaces cannot diverge.
 
-One pass dispatches each frame by link layer: SocketCAN records go to ``zelos-can``'s
-``CanDecoder``, Ethernet / IPv6 / HomePlug-AV frames to the V2G decoder. Both write one
-isolated namespace, so CAN and V2G land in one time-aligned trace that never mixes with
-a live session.
+Distinct from `capture.replay_pcap`, which decodes into the *live* namespace so
+rows stream to a running agent. Conversion produces a file and nothing else: it
+builds its own `TraceNamespace` + `TraceWriter`, so `zelos_sdk.init()` never
+runs and no agent has to be reachable.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import zelos_sdk
-
-from .can_ingest import CanIngest
-from .codec import ConversionStats, V2gCodec
-from .pcap import link_frame
-from .socketcan import parse_socketcan
-from .stream import V2gStreamDecoder
+from .capture import make_decoder
+from .constants import DEFAULT_PREFIX
+from .decode import V2gConfig, counters
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_FORMATS = {".pcap", ".pcapng"}
+SUPPORTED_FORMATS = (".pcap", ".pcapng")
+#: Decoded by zelos-packet, which decides by magic bytes, not by name.
+COMPRESSED_SUFFIXES = (".gz", ".zst")
 
 
-def resolve_trz_output(input_file: Path, output: Path | None, overwrite: bool) -> Path:
-    """Resolve the ``.trz`` output path — shared by the CLI and the action.
+def _strip_suffix(name: str, suffixes: tuple[str, ...]) -> str:
+    for suffix in suffixes:
+        if name.lower().endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    return name
 
-    Enforces a ``.trz`` suffix, refuses to overwrite the input, and deletes an
-    existing output only when ``overwrite`` is set.
+
+def capture_stem(path: Path) -> str:
+    """`run1` for run1.pcap, run1.pcapng.gz and run1.zst alike."""
+    return _strip_suffix(_strip_suffix(path.name, COMPRESSED_SUFFIXES), SUPPORTED_FORMATS)
+
+
+def resolve_output(
+    input_file: Path, output: Path | None = None, *, overwrite: bool = False
+) -> Path:
+    """Where one input's `.trz` goes: the input's capture stem plus `.trz` unless named.
 
     Raises:
-        ValueError: the resolved output would be the input file.
-        FileExistsError: the output exists and ``overwrite`` is False.
+        ValueError: the resolved output is the input file.
+        FileExistsError: the output exists and `overwrite` is False.
     """
-    out = output if output else input_file.with_suffix(".trz")
+    out = (
+        Path(output).expanduser()
+        if output is not None
+        else input_file.with_name(f"{capture_stem(input_file)}.trz")
+    )
     if out.suffix.lower() != ".trz":
         out = out.with_suffix(".trz")
     if out == input_file:
-        raise ValueError("output path cannot be the same as the input")
+        raise ValueError(f"Output path is the input file: {out}")
     if out.exists():
         if not overwrite:
-            raise FileExistsError(f"output exists: {out} (enable overwrite to replace)")
+            raise FileExistsError(f"Output exists: {out} (use --force / enable Overwrite)")
         out.unlink()
     return out
 
 
-@dataclass
-class CaptureStats:
-    """Combined stats for a multi-protocol convert (``convert_capture``)."""
+def convert_pcap(
+    input_file: str | Path,
+    output_file: str | Path,
+    *,
+    v2g: V2gConfig = V2gConfig(),
+    prefix: str = DEFAULT_PREFIX,
+) -> dict[str, Any]:
+    """Convert one pcap/pcapng, optionally gzip or zstd compressed, to `output_file`.
 
-    v2g: ConversionStats = field(default_factory=ConversionStats)
-    can_frames: int = 0
-    can_decoded_frames: int = 0
-    can_unknown_ids: int = 0
-    dbc: str | None = None
-    duration_seconds: float | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "v2g": self.v2g.to_dict(),
-            "can_frames": self.can_frames,
-            "can_decoded_frames": self.can_decoded_frames,
-            "can_unknown_ids": self.can_unknown_ids,
-            "dbc": self.dbc,
-            "duration_seconds": round(self.duration_seconds, 3)
-            if self.duration_seconds is not None
-            else None,
-        }
-
-
-def _dispatch_capture(input_file: Path, v2g_decoder: V2gStreamDecoder, on_can_frame) -> None:
-    """Read a capture once and route each frame: SocketCAN records to
-    ``on_can_frame``, Ethernet / IPv6 / HomePlug-AV to the V2G stream decoder.
-
-    scapy reads the pcap/pcapng container but has no dissector for
-    ``LINKTYPE_CAN_SOCKETCAN`` (227), so it hands those records back as raw
-    bytes — anything with no Ethernet/SLL link frame is a SocketCAN candidate.
-    """
-    from scapy.packet import Raw
-    from scapy.utils import PcapReader
-
-    with PcapReader(str(input_file)) as reader:
-        for pkt in reader:
-            if link_frame(pkt) is None:
-                raw = bytes(pkt[Raw].load) if pkt.haslayer(Raw) else bytes(pkt)
-                frame = parse_socketcan(float(pkt.time), raw)
-                if frame is not None:
-                    on_can_frame(frame)
-                continue
-            v2g_decoder.feed_packet(pkt)
-
-
-def convert_capture(
-    input_file: Path, output_file: Path, dbc: Path | str | None = None
-) -> CaptureStats:
-    """Convert any capture to ``.trz``, decoding both CAN and V2G in one pass.
-
-    SocketCAN frames become ``can_raw/*`` rows (plus decoded ``can_codec/<message>``
-    rows when ``dbc`` is given); V2G frames become the usual ``v2g/*`` rows. Both
-    share one namespace, so a combined CAN+V2G capture yields one time-aligned
-    trace. Timestamps are preserved as captured.
+    Rows keep the capture's own timestamps. No agent, no `zelos_sdk.init()`. A
+    failed decode removes the partial file: a stub .trz would look exactly like
+    a successful conversion of an empty capture.
 
     Raises:
-        FileNotFoundError: input (or ``dbc``) file missing.
-        ValueError: unsupported extension.
+        FileNotFoundError: the input does not exist.
     """
-    input_file = Path(input_file)
-    output_file = Path(output_file)
-    if not input_file.exists():
-        raise FileNotFoundError(f"Input file not found: {input_file}")
-    if input_file.suffix.lower() not in SUPPORTED_FORMATS:
-        raise ValueError(
-            f"Unsupported format '{input_file.suffix}'. Supported: {', '.join(SUPPORTED_FORMATS)}"
-        )
-    if dbc is not None:
-        dbc = Path(dbc)
-        if not dbc.exists():
-            raise FileNotFoundError(f"DBC file not found: {dbc}")
+    import zelos_sdk
 
-    logger.info("Converting %s -> %s", input_file, output_file)
-    ns = zelos_sdk.TraceNamespace("converter")
-    v2g_stats = ConversionStats()
-    span: dict[str, float | None] = {"first": None, "last": None}
+    source = Path(input_file).expanduser()
+    destination = Path(output_file).expanduser()
+    if not source.is_file():
+        raise FileNotFoundError(f"Input file not found: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
 
-    def track(ts: float) -> None:
-        if span["first"] is None or ts < span["first"]:
-            span["first"] = ts
-        if span["last"] is None or ts > span["last"]:
-            span["last"] = ts
+    logger.info("Converting %s -> %s", source, destination)
+    namespace = zelos_sdk.TraceNamespace("converter")
+    try:
+        with zelos_sdk.TraceWriter(str(destination), namespace=namespace):
+            decoder = make_decoder(
+                capture_stem(source), prefix, namespace=namespace, cached=False, v2g=v2g
+            )
+            packets = decoder.convert_file(str(source))
+            decoder.flush()
+            decoded = counters(decoder.metrics())
+    except KeyboardInterrupt:
+        logger.error("Aborted; partial trace kept: %s", destination)
+        raise
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        logger.error("Conversion of %s failed; removed partial %s", source.name, destination)
+        raise
 
-    # Created on the first SocketCAN frame, so a V2G-only capture gets no empty can* tables.
-    can: dict[str, CanIngest | None] = {"ingest": None}
-
-    def on_can(f) -> None:
-        track(f.ts)
-        if can["ingest"] is None:
-            can["ingest"] = CanIngest(ns, dbc=str(dbc) if dbc else None)
-        can["ingest"].emit(f)
-
-    def on_slac(f) -> None:
-        track(f.ts)
-        v2g.emit_slac(f)
-        v2g_stats.slac_frames += 1
-
-    def on_sdp(f) -> None:
-        track(f.ts)
-        v2g.emit_sdp(f)
-        v2g_stats.sdp_frames += 1
-
-    def on_message(m) -> None:
-        track(m.ts)
-        v2g_stats.messages += 1
-        _decoded, dialect, emitted = v2g.emit_message(m)
-        if emitted:
-            v2g_stats.decoded_messages += 1
-        if dialect and v2g_stats.protocol is None:
-            v2g_stats.protocol = dialect
-
-    with zelos_sdk.TraceWriter(str(output_file), namespace=ns):
-        v2g = V2gCodec(namespace=ns)
-        v2g_decoder = V2gStreamDecoder(on_slac=on_slac, on_sdp=on_sdp, on_message=on_message)
-        _dispatch_capture(input_file, v2g_decoder, on_can)
-
-    if span["first"] is not None and span["last"] is not None:
-        duration = span["last"] - span["first"]
-        v2g_stats.duration_seconds = duration
-    else:
-        duration = None
-
-    stats = CaptureStats(v2g=v2g_stats, dbc=str(dbc) if dbc else None, duration_seconds=duration)
-    if can["ingest"] is not None:
-        m = can["ingest"].metrics()
-        stats.can_frames = m.messages_received
-        stats.can_decoded_frames = m.messages_decoded
-        stats.can_unknown_ids = m.unknown_messages
-        stats.dbc = can["ingest"].dbc
-
-    logger.info("Conversion complete: %s", stats.to_dict())
-    return stats
+    logger.info("Converted %s: %d packets -> %s", source.name, packets, destination)
+    return {
+        "status": "success",
+        "input_file": str(source),
+        "output_file": str(destination),
+        "packets": packets,
+        **decoded,
+    }

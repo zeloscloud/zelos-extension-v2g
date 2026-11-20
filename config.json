@@ -1,0 +1,8 @@
+{
+  "interfaces": [],
+  "advanced": {
+    "prefix": "V2G",
+    "promiscuous": true,
+    "log_level": "INFO"
+  }
+}
