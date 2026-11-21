@@ -110,6 +110,7 @@ def list_interfaces() -> dict[str, Any]:
     "Check Permissions",
     "Probe whether live capture is possible on this machine and, if not, return "
     "the exact command to fix it.",
+    hidden=True,
     read_only=True,
 )
 @action.text(
@@ -139,6 +140,7 @@ def check_permissions(interface: str = "") -> dict[str, Any]:
     "small; v2g_tls_no_secret above zero means a TLS session's secrets were not "
     "disclosed. status is error when a capture has ended, and warning when a loss "
     "or decode-failure counter is above zero.",
+    hidden=True,
     read_only=True,
 )
 def get_status() -> dict[str, Any]:
@@ -161,7 +163,7 @@ def get_status() -> dict[str, Any]:
 
 
 @action(
-    "Convert Pcap",
+    "Convert",
     "Convert a .pcap/.pcapng file, optionally gzip or zstd compressed, to a Zelos "
     "trace (.trz) of its charging sessions, with the capture's own timestamps. Runs "
     "without the extension running: no capture handle, no interface, no privileges, "
@@ -196,7 +198,7 @@ def get_status() -> dict[str, Any]:
 @action.boolean(
     "force", title="Overwrite existing output", required=False, default=False, widget="toggle"
 )
-def convert_pcap(
+def convert(
     input_file: str, output_file: str = "", tls_keylog: str = "", force: bool = False
 ) -> dict[str, Any]:
     """Shares `converter.convert_pcap` with the `convert` CLI command. Failures
@@ -219,6 +221,7 @@ def convert_pcap(
     "Where the bundled demo capture is on the machine running the agent. Paste it "
     "into Advanced > Replay PCAP File to try the extension without a charging link.",
     standalone=True,
+    hidden=True,
     read_only=True,
 )
 def demo_capture_path() -> dict[str, Any]:

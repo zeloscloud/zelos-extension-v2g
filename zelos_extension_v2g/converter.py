@@ -1,5 +1,5 @@
 """pcap -> .trz conversion, shared by the `convert` CLI command and the
-`Convert Pcap` action so the two surfaces cannot diverge.
+`Convert` action so the two surfaces cannot diverge.
 
 Distinct from `capture.replay_pcap`, which decodes into the *live* namespace so
 rows stream to a running agent. Conversion produces a file and nothing else: it

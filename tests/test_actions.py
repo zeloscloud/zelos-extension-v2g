@@ -24,10 +24,10 @@ def test_actions_register_under_their_bare_names_and_flags_are_pinned():
     assert flags == {
         "auto_config": (True, True),
         "list_interfaces": (True, True),
-        "check_permissions": (True, False),
-        "get_status": (True, False),
-        "convert_pcap": (True, False),
-        "demo_capture_path": (True, False),
+        "check_permissions": (True, True),
+        "get_status": (True, True),
+        "convert": (True, False),
+        "demo_capture_path": (True, True),
     }
     assert actions.demo_capture_path()["path"] == str(DEMO_PCAP)
     assert DEMO_PCAP.is_file()

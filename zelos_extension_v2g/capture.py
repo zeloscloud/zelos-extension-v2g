@@ -123,7 +123,7 @@ def parse_interfaces(config: dict) -> list[InterfaceConfig]:
 _REPLAY_HINT = (
     "No capture rights on this machine? Set 'Replay PCAP File' in the extension\n"
     "config to decode a .pcap/.pcapng instead; that path opens no capture handle\n"
-    "and needs no privileges. The 'Demo Capture Path' action names a bundled one."
+    "and needs no privileges."
 )
 
 
