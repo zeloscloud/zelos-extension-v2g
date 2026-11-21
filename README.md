@@ -36,16 +36,17 @@ Decoding a file instead plays it once at the capture's pace, then the extension 
 zelos extensions start zeloscloud.zelos-extension-v2g --config '{"advanced": {"replay_pcap": "session.pcapng"}}'
 ```
 
-To turn a file into a `.trz` with the capture's own timestamps, run the `V2G/convert_pcap` action or `uv run zelos-extension-v2g convert session.pcapng`.
+To turn a file into a `.trz` with the capture's own timestamps, run the **Convert** action or `uv run zelos-extension-v2g convert session.pcapng`.
 
 ## Try it without hardware
 
 One ISO 15118-2 DC session ships with the extension, SDP to SessionStop, recorded between a software-in-the-loop charger and vehicle.
 
-- **App**: run `V2G/demo_capture_path`, paste the path into **Advanced → Replay PCAP File**, save, start
-- **CLI**: `uv run zelos-extension-v2g --demo`
+```bash
+uv run zelos-extension-v2g --demo
+```
 
-Either way it plays once and the extension exits.
+It plays once and the extension exits.
 
 ## What you get
 
@@ -71,7 +72,7 @@ Everything lands under the **Prefix** source (default `V2G`), one branch per int
 A charger or vehicle under test can disclose its TLS session secrets, as test systems do. With them a TLS 1.2 or TLS 1.3 session decodes to the same rows as a cleartext one.
 
 - **On the link**: an endpoint that sends its key log lines as UDP datagrams needs no configuration
-- **From a file**: set **TLS Key Log File** to the key log file (NSS key log format) the endpoint writes. A live capture follows the file as it grows; a replay reads it once. `convert_pcap` and the `convert` command take the file as their own argument
+- **From a file**: set **TLS Key Log File** to the key log file (NSS key log format) the endpoint writes. A live capture follows the file as it grows; a replay reads it once. The **Convert** action and the `convert` command take the file as their own argument
 
 Secrets are used in memory to derive keys and never appear in a decoded row, counter or log line. The raw `packets` rows are the capture as captured: when an endpoint discloses secrets on the link, those datagrams are in `packets` like any other frame. Treat a trace of such a link as you would the key log itself.
 
@@ -89,7 +90,7 @@ sudo /path/to/python -m zelos_packet install-helper
 - `python -m zelos_packet status` says whether capture would work right now
 - **Windows**: `check` names the capture driver to install
 
-A failed start says the same in the extension log. While the extension runs, `V2G/check_permissions` reports it too.
+A failed start says the same in the extension log.
 
 ## Settings
 
@@ -109,11 +110,9 @@ If any configured interface cannot be opened, the start fails with the reason in
 
 | Action | |
 | --- | --- |
-| `V2G/list_interfaces` | NICs on the machine running the agent |
-| `V2G/check_permissions` | Can we capture? If not, the exact fix |
-| `V2G/get_status` | Per-interface capture and decoder counters: packets, drops, messages decoded, TLS sessions decrypted |
-| `V2G/convert_pcap` | Convert a capture to `.trz`, optionally with a TLS key log. Runs without the extension started |
-| `V2G/demo_capture_path` | Path of the bundled demo capture, for `advanced.replay_pcap`. Runs without the extension started |
+| `V2G/convert` | Convert a capture to `.trz`, optionally with a TLS key log. Runs without the extension started |
+
+From the CLI and Zelos AI, `V2G/list_interfaces`, `V2G/check_permissions`, `V2G/get_status` (per-interface capture and decoder counters) and `V2G/demo_capture_path` are also available.
 
 ## CLI
 

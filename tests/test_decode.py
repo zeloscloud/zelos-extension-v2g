@@ -43,7 +43,7 @@ class TestInstalledWheel:
 
     def test_the_demo_converts_to_a_whole_session(self, tmp_path: Path):
         pcap = Path(shutil.copy(DEMO_PCAP, tmp_path / DEMO_PCAP.name))
-        result = actions.convert_pcap(str(pcap))
+        result = actions.convert(str(pcap))
         assert Path(result["output_file"]) == tmp_path / "v2g-demo.trz"
         assert (result["status"], result["packets"], result["v2g_sdp_frames"]) == (
             "success",
@@ -57,10 +57,10 @@ class TestInstalledWheel:
 
     def test_a_tls_session_decodes_only_with_its_key_log(self, tmp_path: Path):
         pcap = FILES / "iso2-tls.pcap"
-        opaque = actions.convert_pcap(str(pcap), str(tmp_path / "opaque.trz"))
+        opaque = actions.convert(str(pcap), str(tmp_path / "opaque.trz"))
         assert (opaque["v2g_tls_connections"], opaque["v2g_tls_no_secret"]) == (1, 1)
         assert (opaque["status"], opaque["v2g_messages"]) == ("warning", 0)
-        clear = actions.convert_pcap(
+        clear = actions.convert(
             str(pcap), str(tmp_path / "clear.trz"), tls_keylog=str(FILES / "iso2-tls.keys")
         )
         assert (clear["v2g_tls_decrypted"], clear["v2g_tls_no_secret"]) == (1, 0)

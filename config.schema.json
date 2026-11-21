@@ -73,7 +73,7 @@
         "replay_pcap": {
           "type": "string",
           "title": "Replay PCAP File",
-          "description": "Decode a .pcap/.pcapng file, optionally gzip or zstd compressed, instead of capturing live. This path opens no capture handle and needs no privileges, so it works on any machine; use it to analyze a capture someone sent you. Plays at the capture's original pace with timestamps shifted to start now. When set, the Interfaces list is ignored and the extension exits once the replay finishes. To try the extension without a charging link, pick the bundled demo capture: the 'Demo Capture Path' action shows where it is.",
+          "description": "Decode a .pcap/.pcapng file, optionally gzip or zstd compressed, instead of capturing live. This path opens no capture handle and needs no privileges, so it works on any machine; use it to analyze a capture someone sent you. Plays at the capture's original pace with timestamps shifted to start now. When set, the Interfaces list is ignored and the extension exits once the replay finishes.",
           "ui:widget": "file-picker",
           "ui:options": {
             "accept": ".pcap,.pcapng,.gz,.zst"
