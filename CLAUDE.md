@@ -1,94 +1,50 @@
-# CLAUDE.md — zelos-extension-v2g
+# CLAUDE.md: zelos-extension-v2g
 
-Decodes ISO 15118 / DIN 70121 V2G (EV ↔ charger) traffic into Zelos traces — from a pcap or
-live off the wire. Also decodes SocketCAN frames found in the same capture, so a capture with
-both CAN and V2G converts to one time-aligned `.trz`.
+ISO 15118 / DIN 70121 charging links in Zelos: SLAC, SDP, V2GTP and every decoded message,
+live from a network interface or from a pcap. Capture and decode are `zelos-packet`'s (Rust);
+this extension is the configuration, actions and CLI around it.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `protocol.py` | Wire constants + SLAC MMTYPE table. |
-| `pcap.py` | SLAC/SDP/V2GTP record types and per-frame parsers; `link_frame` (Ethernet + Linux cooked SLL). |
-| `stream.py` | Incremental V2GTP framer every ingest path feeds (`V2gStreamDecoder`). |
-| `slac.py` | Per-frame SLAC field decode (attenuation, match). |
-| `codec.py` | V2G records → trace events; `emit_message` dispatches DIN/ISO-2/SAP. |
-| `socketcan.py` | Parse `LINKTYPE_CAN_SOCKETCAN` (227) records → `CanFrame`. |
-| `can_ingest.py` | Glue to `zelos_can.CanDecoder` (raw + DBC decode lives in `zelos-can`). |
-| `converter.py` | `convert_capture(in, out, dbc=)` — any capture → `.trz`. |
-| `live.py` | `sniff_into` (iface/replay) + `decode_stream_into` (stdin pcap). |
-| `extension.py` | `V2gConverter`: the Convert Pcap and Get Status actions. |
-| `cli/` | `app.py` (agent app-mode), `convert.py`, `live.py`, `decode.py`. |
-| `exi/libv2g.py`, `exi/_lib/` | ctypes binding + prebuilt libcbv2g shim (one per platform). |
-| `native/` | The C shim (`v2g_din_shim.c`) + build scripts. |
+| `main.py` | Entry point: app mode (no subcommand) and the CLI group. Re-exports `ACTION_PREFIX`. |
+| `decode.py` | The one seam onto the V2G decoder: `V2gConfig.kwargs()`, the counter names, `require()`. |
+| `capture.py` | `trace_layout`, `parse_interfaces`, `CaptureSession`, `make_decoder`, `replay_pcap`, permission probe and remediation text. |
+| `converter.py` | `convert_pcap`: capture file to `.trz`, own namespace, no agent. |
+| `actions.py` | The `V2G/*` actions, all read-only free functions. |
+| `cli/app.py` | App mode from `config.json`: validate, `init_sdk`, replay or live sessions. |
+| `cli/commands.py` | `interfaces`, `check`, `capture`, `replay`, `convert`. |
+| `pkg.py` | Import probe for `zelos_packet`; `module()` is the test seam. |
+| `demo/` | The bundled demo capture. |
 
-## Design principle
+## Rules
 
-**Packet-in / row-out:** every event maps to one frame on the wire and its decoded fields.
-Decode encoded bytes into human-readable fields wherever possible, but **synthesize nothing
-across frames** — no session summaries, health roll-ups, or inferred/default values.
-
-## Decode is layered
-
-- **Layer 1** (pure-Python, always): SLAC handshake (per MMTYPE, raw bytes retained;
-  `CM_ATTEN_CHAR.IND` / `CM_SLAC_MATCH.CNF` also decoded per-frame), SDP discovery, and the
-  V2GTP message timeline with raw EXI per row.
-- **Layer 2** (needs the bundled shim): per-message EXI field decode. If no shim exists for
-  the platform, `libv2g.available()` is False and Layer 1 stands alone.
-
-All ingest paths share one decode: offline `convert_capture`, live iface/replay (`sniff_into`),
-and stdin (`decode_stream_into` / the `decode` subcommand — `tcpdump -w - | … decode`).
-`link_frame` makes it link-layer-agnostic (Ethernet + Linux cooked SLL), so `-i eth0` and
-`-i any` both decode.
-
-`emit_message` tries `decode_din → decode_iso2 → decode_sap`; the dialects are mutually
-exclusive, and DIN / ISO 15118-2 share field names so the codec events are reused across both.
-
-## Bundled EXI codec
-
-V2G messages are EXI, decoded via EVerest `libcbv2g` (Apache-2.0) through a C shim, statically
-linked into one shared lib **prebuilt per platform and committed** under
-`exi/_lib/libv2gshim-<os>-<arch>.{dylib,so}`, loaded via stdlib `ctypes`. **No compiler runs at
-install; nothing is published to PyPI** — keep it that way.
-
-- **Shim ↔ codec contract:** every field the shim emits must appear in `codec._FIELD_META`
-  (field → DataType + unit) or it is silently dropped. Widen both together.
-- **Rebuild:** `bash native/build.sh` (needs `cmake`, a C compiler, `git`; position-independent
-  code is required on x86_64). `bash native/build-linux.sh` cross-builds the Linux `.so`s in
-  manylinux containers. Commit the rebuilt artifacts.
-
-## CAN-in-pcap
-
-`convert_capture` reads a capture once and dispatches per frame: no `link_frame` → SocketCAN →
-`zelos_can.CanDecoder`; Ethernet/IPv6/HomePlug-AV → `V2gStreamDecoder`. Both write **one shared
-`TraceNamespace`**, so CAN (`can_raw/*`, plus decoded `can_codec/<id>_<msg>` with a DBC) and V2G
-(`v2g/*`) land in one time-aligned `.trz`. CAN-only, V2G-only, and combined captures all fall
-out of the same pass.
-
-**CAN decode is not reimplemented here** — raw + DBC frame cracking lives in the `zelos-can`
-dependency; `can_ingest.py` is only glue, and `socketcan.py` hand-parses the 16-byte classic
-frame (id/flags big-endian: bit31 EFF / bit30 RTR / bit29 ERR; byte 4 = dlc ≤ 8) because scapy
-has no linktype-227 dissector. Two `CanDecoder` gotchas:
-
-1. The DBC is optional (`zelos-can >= 0.0.7a0`); pass `log_raw_frames=True` so raw frames are
-   kept even when a DBC is decoding signals.
-2. Bind it to the writer's namespace via injected `source=` / `raw_source=` `TraceSource`s —
-   `source_name=` alone binds the default namespace and the trace comes out empty.
-
-## Trace output
-
-The offline converter uses an isolated `TraceNamespace` + `TraceWriter` (no agent), and relies
-on `TraceWriter.close()` to flush buffered events. Converted rows keep the original capture
-timestamps; the replay path re-stamps to arrival time (like `tcpreplay`).
+- **No decode here.** Field names, units, value tables, TLS and reassembly are `zelos-packet`'s.
+  A decode bug is fixed there; this repo then moves its exact pin.
+- **One tree shape.** `capture.trace_layout(prefix, capture)` returns the trace source and the
+  event-name prefix. Live capture, replay and conversion all call it; nothing else builds a name.
+- **One set of decoder keywords.** `decode.V2gConfig.kwargs()` is the only place `v2g` and
+  `tls_keylog` are spelled.
+- **Live rows never pass through this process.** `PacketCapture` supervises the capture helper,
+  which streams to the agent itself. `--file` under `capture` records only the extension's log.
+- **Start policy.** Any interface that fails to open fails the whole start with one ERROR line;
+  the supervisor does not restart, so that line is the user's whole experience.
+- **No capture filter.** The agent's own traffic is excluded by the package default. The decoder
+  needs SLAC (0x88E1), SDP and V2G over either IP version, and key log datagrams on any UDP port.
+- **Secrets.** A key log path is passed through and logged; the file is never read here.
 
 ## Testing
 
 ```bash
 just check    # ruff format check and lint
-just format   # ruff format
-just test     # pytest — runs against the committed pyPLC fixtures in tests/files/
+just test     # pytest
 just package  # zelos extensions package .
 ```
 
-Layer-2 tests are `skipif(not libv2g.available())`. Don't leave stale test agents/extensions
-running; never commit without an explicit ask.
+`tests/conftest.py` stubs `zelos_packet` with the real constructor signatures spelled out, so a
+drifting keyword fails. `tests/test_decode.py` runs the installed wheel over the demo capture and
+`tests/files/iso2-tls.pcap` (a TLS 1.2 session and its key log). Captures are our own
+software-in-the-loop recordings; do not add third-party captures.
+
+Don't leave stale test agents or extensions running; never commit without an explicit ask.
