@@ -88,3 +88,6 @@ config.json
 native/.build/
 !zelos_extension_v2g/exi/_lib/*.so
 !zelos_extension_v2g/exi/_lib/*.dylib
+
+# Claude
+.claude/
