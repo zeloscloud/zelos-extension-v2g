@@ -1,16 +1,18 @@
 [project]
 name = "zelos-extension-v2g"
 version = "0.1.0"
-description = "Decode ISO 15118-2 and DIN 70121 EV charging (V2G) into signals: SLAC, SDP and V2GTP messages live from a network interface, or from a pcap or pcapng capture, with its SocketCAN frames, converted to one .trz trace; message fields decode on Linux and Apple silicon macOS."
+description = "ISO 15118 / DIN 70121 EV charging (V2G) decode for Zelos"
 authors = [{ name = "Zelos", email = "support@zeloscloud.io" }]
 readme = "README.md"
 requires-python = ">=3.11"
-keywords = ["zelos", "extension", "v2g", "iso15118", "din70121", "ccs", "ev-charging", "exi"]
+keywords = ["zelos", "extension", "v2g", "iso15118", "din70121", "ccs", "ev-charging", "tls", "pcap"]
 dependencies = [
+    # 0.0.13 has `hidden=` actions.
     "zelos-sdk>=0.0.13",
     "rich-click>=1.8.0",
-    "scapy>=2.5.0",
-    "zelos-can>=0.0.7a0",
+    # Rust-cored capture and V2G decode. Exact pin: the decoder surface and the
+    # privileged capture helper are matched to one release.
+    "zelos-packet==0.0.7",
 ]
 
 [project.scripts]
@@ -39,6 +41,11 @@ required-version = ">=0.9.5"
 [tool.hatch.build.targets.wheel]
 packages = ["zelos_extension_v2g"]
 
+# `main.py` is the extension entry point and the console script's module
+# (`main:cli`), so the wheel carries it alongside the package.
+[tool.hatch.build.targets.wheel.force-include]
+"main.py" = "main.py"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--log-cli-level=INFO"
@@ -57,4 +64,7 @@ select = [
     "SIM",  # flake8-simplify
     "C4",   # flake8-comprehensions
     "PTH",  # flake8-use-pathlib
+]
+ignore = [
+    "B008",   # function call in defaults (frozen dataclass defaults)
 ]

@@ -1,39 +1,98 @@
 {
-  "$comment": "Configuration UI for the Zelos App. See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/#configuration",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "title": "V2G",
-  "description": "ISO 15118 / DIN 70121 V2G decode. Leave the capture fields empty for converter-only (use the Convert Pcap action); set an interface to capture live.",
+  "additionalProperties": false,
+  "title": "V2G Configuration",
+  "description": "Pick the network interfaces on the charging link, save, then start. SLAC, SDP and every V2G message between the vehicle and the charger appear as they cross the link. Live capture needs a one-time grant on the machine running the agent; a start without it stops with the command to run in the log. Decoding a pcap file needs no privileges at all.",
+  "ui:options": {
+    "autoconfig": "V2G/auto_config"
+  },
   "properties": {
-    "interface": {
-      "type": "string",
-      "title": "Live capture interface(s)",
-      "description": "Network interface to sniff for live V2G capture (a bridged green-PHY / CCS link). Comma-separate for multiple. Requires capture privileges. Leave empty for converter-only.",
-      "default": "",
-      "ui:placeholder": "e.g. eth0  (or  eth0,eth1)"
+    "interfaces": {
+      "type": "array",
+      "title": "Interfaces",
+      "description": "Links to capture, in parallel. Each is a branch under the Prefix source. Leave empty when using Replay PCAP File.",
+      "items": {
+        "title": "Interface",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "interface": {
+            "type": "string",
+            "title": "Interface",
+            "description": "Network interface that sees the charging link (eth0, en0, enp3s0, ...): a tap, a bridge, or the powerline modem's Ethernet side. Choose from the machine running the agent, or type a name.",
+            "ui:widget": "action-choices",
+            "ui:placeholder": "eth0",
+            "ui:options": {
+              "action": "V2G/list_interfaces"
+            }
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Names this interface's branch in the signal tree. Defaults to the interface name. Letters, digits, space, '_' and '-' only. Every entry shares the Prefix source, so each name must be unique.",
+            "ui:placeholder": "defaults to the interface"
+          }
+        },
+        "required": [
+          "interface"
+        ]
+      },
+      "default": []
     },
-    "replay_pcap": {
+    "tls_keylog": {
       "type": "string",
-      "title": "Replay pcap (testing)",
-      "description": "Replay a pcap/pcapng as a live stream instead of sniffing an interface (same decode path; for testing without hardware).",
-      "default": "",
+      "title": "TLS Key Log File",
+      "description": "Optional. A key log file (NSS key log format) that the charger or vehicle under test writes its TLS session secrets to. Sessions under TLS whose secrets it holds are decoded like cleartext ones. A live capture follows the file as it grows, so it may be created after the start. Applies to live capture and to Replay PCAP File. Secrets the endpoint sends on the link itself need no file.",
       "ui:widget": "file-picker"
     },
-    "source_name": {
-      "type": "string",
-      "title": "Trace source name",
-      "description": "Name of the trace source the decoded V2G signals are published under.",
-      "default": "v2g"
-    },
-    "log_level": {
-      "type": "string",
-      "title": "Log Level",
-      "enum": [
-        "DEBUG",
-        "INFO",
-        "WARNING",
-        "ERROR"
-      ],
-      "default": "INFO"
+    "advanced": {
+      "type": "object",
+      "title": "Advanced",
+      "description": "Settings that apply to every interface, and replaying a capture file instead.",
+      "ui:options": {
+        "collapsed": true
+      },
+      "additionalProperties": false,
+      "default": {},
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "title": "Prefix",
+          "description": "Trace source the rows land under: '<prefix>/<name>/v2gtp', '<prefix>/<name>/CurrentDemandReq', ...",
+          "minLength": 1,
+          "default": "V2G",
+          "ui:placeholder": "V2G"
+        },
+        "promiscuous": {
+          "type": "boolean",
+          "title": "Promiscuous Mode",
+          "description": "Receive frames addressed to other stations. A tap or bridge on a charging link carries the vehicle's and the charger's unicast traffic, which the interface drops without it. Turn off only when this machine is itself the vehicle or the charger.",
+          "default": true
+        },
+        "replay_pcap": {
+          "type": "string",
+          "title": "Replay PCAP File",
+          "description": "Decode a .pcap/.pcapng file, optionally gzip or zstd compressed, instead of capturing live. This path opens no capture handle and needs no privileges, so it works on any machine; use it to analyze a capture someone sent you. Plays at the capture's original pace with timestamps shifted to start now. When set, the Interfaces list is ignored and the extension exits once the replay finishes.",
+          "ui:widget": "file-picker",
+          "ui:options": {
+            "accept": ".pcap,.pcapng,.gz,.zst"
+          }
+        },
+        "log_level": {
+          "type": "string",
+          "title": "Log Level",
+          "description": "Logging verbosity for the extension.",
+          "enum": [
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR",
+            "CRITICAL"
+          ],
+          "default": "INFO"
+        }
+      }
     }
   }
 }

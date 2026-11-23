@@ -1,11 +1,11 @@
 name = "V2G"
 version = "0.1.0"
-description = "Decode ISO 15118-2 and DIN 70121 EV charging (V2G) into signals: SLAC, SDP and V2GTP messages live from a network interface, or from a pcap or pcapng capture, with its SocketCAN frames, converted to one .trz trace; message fields decode on Linux and Apple silicon macOS."
+description = "Decode EV charging (V2G) into signals: SLAC, SDP and every ISO 15118-2, ISO 15118-20 and DIN 70121 message, live from a network interface or from a pcap or pcapng capture, with TLS sessions decoded when the endpoint discloses its session secrets."
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-v2g"
 # At most 20 keywords and 10 categories. Marketplace search matches both, the name, description,
 # author and repository. Zelos AI sees the name, description and keywords, not the categories.
-keywords = ["ev charging", "ev charger", "evse", "evcc", "secc", "ccs", "combined charging system", "vehicle to grid", "iso 15118", "slac", "homeplug av", "green phy", "exi", "pcap", "wireshark", "tcpdump", "charge point", "charging station", "iso 15118-2", "din70121"]
+keywords = ["ev charging", "ev charger", "evse", "evcc", "secc", "ccs", "combined charging system", "vehicle to grid", "iso 15118", "iso 15118-2", "iso 15118-20", "din 70121", "slac", "homeplug av", "green phy", "exi", "tls", "charge point", "pcap", "charging station"]
 categories = ["Automotive", "Energy", "Networking", "Diagnostics"]
 icon = "assets/icon.png"
 readme = "README.md"
@@ -20,6 +20,23 @@ schema = "config.schema.json"
 runtime = "python"
 entry = "main.py"
 python_version = "3.11"
+# The platforms zelos-packet ships a wheel for.
+targets = ["linux-x86_64", "linux-aarch64", "darwin-arm64", "windows-x86_64"]
 
+# Stopping tears down every capture handle and lets the SDK's atexit hook drain
+# the trace pipeline; 15s leaves room for a busy interface's final flush before
+# the supervisor escalates to SIGKILL.
+[agent.stop]
+grace_seconds = 15
+
+# `config.json` ships so a fresh install has sane defaults before the app writes
+# its own. The demo capture is inside the package directory already; naming it
+# makes the packaging test fail if it goes missing.
 [package]
-paths = ["LICENSE", "main.py", "zelos_extension_v2g"]
+paths = [
+    "LICENSE",
+    "main.py",
+    "zelos_extension_v2g",
+    "zelos_extension_v2g/demo/v2g-demo.pcap",
+    "config.json",
+]
