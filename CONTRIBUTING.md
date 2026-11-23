@@ -17,11 +17,10 @@
 
 | Path | Purpose |
 | ---- | ------- |
-| `main.py` | Entry point: agent mode, and the `convert`, `live` and `decode` commands |
-| `zelos_extension_v2g/` | Capture decode, the trace codec and the actions |
-| `zelos_extension_v2g/exi/_lib/` | The prebuilt EXI decode shim, one per platform |
-| `native/` | The shim's C source and build scripts |
-| `tests/files/` | Sample captures and the example CAN database |
+| `main.py` | Entry point: app mode, and the `interfaces`, `check`, `capture`, `replay` and `convert` commands |
+| `zelos_extension_v2g/` | Configuration, capture lifecycle, actions and CLI |
+| `zelos_extension_v2g/demo/` | The bundled demo capture |
+| `tests/files/` | A TLS session capture and its key log |
 
 ## Commands
 
@@ -34,12 +33,26 @@
 | `just package`         | Package for the Zelos marketplace             |
 | `just release VERSION` | Bump version, check, test, commit, tag        |
 | `just clean`           | Remove build output, caches and packages      |
+| `just run`             | Run the extension against `./config.json`     |
+| `just demo`            | Replay the bundled demo capture once          |
+| `just interfaces`      | List capturable NICs                          |
+| `just check-permissions` | Probe capture rights and print the fix      |
 
-`just --list` also shows the recipes each part adds. `just install` installs the
-pre-commit hooks in `.pre-commit-config.yaml`.
+`just --list` also shows the other recipes. `just install` installs the pre-commit hooks in
+`.pre-commit-config.yaml`.
 
-The tests run on the captures in `tests/files/` and need no network interface. The EXI
-field-decode tests skip on a platform with no shim in `zelos_extension_v2g/exi/_lib/`.
+## The decoder
+
+Capture and V2G decode are `zelos-packet`'s. This extension builds the keyword arguments
+(`zelos_extension_v2g/decode.py`) and decides where rows land
+(`trace_layout` in `zelos_extension_v2g/capture.py`). Tests stub that seam, and run the
+installed wheel over the bundled captures; decode correctness is tested with the decoder.
+
+## Configuration
+
+`config.schema.json` drives the configuration UI in the Zelos desktop app; `config.json` is
+the shipped default. The interface picker uses a `ui:widget` hint rather than an enum,
+because a static schema cannot enumerate a machine's NICs.
 
 ## Run it in Zelos
 
@@ -54,16 +67,6 @@ change:
 - Agent runtime: stop and start the extension. After a dependency change, stop it and run
   `zelos extensions reinstall local.v2g`.
 - `extension.toml`: run `zelos extensions install-local .` again.
-
-## Rebuild the EXI shim
-
-```bash
-bash native/build.sh          # the current platform
-bash native/build-linux.sh    # both Linux shims, in manylinux containers
-```
-
-Commit the rebuilt files in `zelos_extension_v2g/exi/_lib/`. See
-[`native/README.md`](native/README.md) for what each script needs.
 
 ## Packaging
 
