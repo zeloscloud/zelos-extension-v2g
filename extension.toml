@@ -1,5 +1,5 @@
 name = "V2G"
-version = "0.1.2"
+version = "0.2.0"
 description = "Decode EV charging (V2G) into signals: SLAC, SDP and every ISO 15118-2, ISO 15118-20 and DIN 70121 message, live from a network interface or from a pcap or pcapng capture, with TLS sessions decoded when the endpoint discloses its session secrets."
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-v2g"

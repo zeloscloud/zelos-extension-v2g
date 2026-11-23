@@ -1,6 +1,6 @@
 [project]
 name = "zelos-extension-v2g"
-version = "0.1.2"
+version = "0.2.0"
 description = "ISO 15118 / DIN 70121 EV charging (V2G) decode for Zelos"
 authors = [{ name = "Zelos", email = "support@zeloscloud.io" }]
 readme = "README.md"

@@ -549,7 +549,7 @@ wheels = [
 
 [[package]]
 name = "zelos-extension-v2g"
-version = "0.1.2"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "rich-click" },
