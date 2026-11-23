@@ -90,7 +90,7 @@ sudo /path/to/python -m zelos_packet install-helper
 - `python -m zelos_packet status` says whether capture would work right now
 - **Windows**: `check` names the capture driver to install
 
-A failed start says the same in the extension log.
+A failed start says the same in the extension log. `V2G/check_permissions` reports it too, without the extension started.
 
 ## Settings
 
