@@ -121,9 +121,10 @@ def run_sessions(
 
     One interface that fails to open fails the whole start: the ones already
     open are stopped on the way out. A capture that ends while running is one
-    ERROR line; the rest keep capturing. Returning normally (rather than
-    `os._exit`) matters: the SDK's atexit hook drains the trace namespace and
-    blocks until every queued event is delivered.
+    ERROR line; the rest keep capturing. When the last one ends this raises,
+    and the caller exits non-zero. Unwinding (rather than `os._exit`) matters:
+    the SDK's atexit hook drains the trace namespace and blocks until every
+    queued event is delivered.
     """
     stop_event = threading.Event()
     _install_shutdown(stop_event)
@@ -142,9 +143,14 @@ def run_sessions(
         ended: set[str] = set()
         while not stop_event.wait(0.5):
             for session in started:
-                if session.name not in ended and (reason := session.failure()):
-                    ended.add(session.name)
-                    logger.error("Capture on %s ended: %s", session.config.interface, reason)
+                if session.name in ended or not (reason := session.failure()):
+                    continue
+                ended.add(session.name)
+                message = f"Capture on {session.config.interface} ended: {reason}"
+                if len(ended) == len(started):
+                    # Nothing left to capture: the caller logs this and exits non-zero.
+                    raise RuntimeError(f"{message}. Capture has stopped on all interfaces.")
+                logger.error("%s", message)
     finally:
         # Together: each stop is bounded (~3s), so the whole stop is, whatever the count.
         stops = [threading.Thread(target=session.stop) for session in started]
