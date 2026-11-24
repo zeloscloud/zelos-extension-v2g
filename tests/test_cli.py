@@ -80,6 +80,21 @@ class TestAppMode:
         good, bad = FakeCapture.instances
         assert good.stopped and not bad.started
 
+    def test_the_last_capture_ending_stops_the_rest_and_exits_non_zero(
+        self, app_config, monkeypatch, caplog
+    ):
+        app_config["interfaces"] = [{"interface": "en0"}, {"interface": "en1"}]
+        monkeypatch.setattr(app, "_install_shutdown", lambda _stop: None)
+        monkeypatch.setattr(FakeCapture, "is_active", False)
+        monkeypatch.setattr(FakeCapture, "error", "helper killed")
+        with pytest.raises(SystemExit, match="1"):
+            app.run_app_mode(False, None)
+        assert [r.getMessage() for r in caplog.records if r.levelname == "ERROR"] == [
+            "Capture on en0 ended: helper killed",
+            "Capture on en1 ended: helper killed. Capture has stopped on all interfaces.",
+        ]
+        assert all(c.stopped for c in FakeCapture.instances)
+
     def test_nothing_configured_fails_with_one_line(self, app_config, caplog):
         with pytest.raises(SystemExit, match="1"):
             app.run_app_mode(False, None)

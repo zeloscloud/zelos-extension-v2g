@@ -170,10 +170,7 @@ def capture_grant_instructions(*, system: str | None = None) -> str:
 
 
 def remediation_text(interface: str) -> str:
-    return (
-        f"Permission denied opening a capture handle on {interface!r}.\n\n"
-        + capture_grant_instructions()
-    )
+    return f"Capture is not available on {interface!r}.\n\n" + capture_grant_instructions()
 
 
 def _diagnosis(exc: BaseException) -> str:
@@ -307,10 +304,13 @@ class CaptureSession:
         which drains and hands everything to the agent, then reaps it."""
         if self._capture is None:
             return
+        ended = self.failure()
         try:
             self._capture.stop()
         except Exception:
-            logger.exception("Error stopping capture on %s", self.config.interface)
+            # An ended capture re-raises the failure already reported.
+            if not ended:
+                logger.exception("Error stopping capture on %s", self.config.interface)
         self._capture = None
         logger.info("Stopped capture on %s", self.config.interface)
 

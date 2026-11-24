@@ -112,7 +112,7 @@ If any configured interface cannot be opened, the start fails with the reason in
 | --- | --- |
 | `V2G/convert` | Convert a capture to `.trz`, optionally with a TLS key log. Runs without the extension started |
 
-From the CLI and Zelos AI, `V2G/list_interfaces`, `V2G/check_permissions`, `V2G/get_status` (per-interface capture and decoder counters) and `V2G/demo_capture_path` are also available.
+From the CLI and Zelos AI, `V2G/list_interfaces`, `V2G/check_permissions`, `V2G/get_status` (per-interface capture and decoder counters) and `V2G/demo_capture_path` are also available. A capture that ends while running is logged and reported by `get_status`; when the last one ends, the extension logs the reason and exits with an error. Restart it to capture again.
 
 ## CLI
 
