@@ -170,10 +170,7 @@ def capture_grant_instructions(*, system: str | None = None) -> str:
 
 
 def remediation_text(interface: str) -> str:
-    return (
-        f"Permission denied opening a capture handle on {interface!r}.\n\n"
-        + capture_grant_instructions()
-    )
+    return f"Capture is not available on {interface!r}.\n\n" + capture_grant_instructions()
 
 
 def _diagnosis(exc: BaseException) -> str:
