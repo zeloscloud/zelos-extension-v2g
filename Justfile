@@ -101,7 +101,7 @@ run:
 lock:
     uv lock
 
-# Replay the bundled demo capture once
+# Replay the bundled demo capture until stopped
 demo:
     uv run python main.py --demo
 

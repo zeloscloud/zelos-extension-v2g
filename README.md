@@ -42,11 +42,12 @@ To turn a file into a `.trz` with the capture's own timestamps, run the **Conver
 
 One ISO 15118-2 DC session ships with the extension, SDP to SessionStop, recorded between a software-in-the-loop charger and vehicle.
 
-```bash
-uv run zelos-extension-v2g --demo
-```
+In the app, turn on **Advanced → Demo** in the configuration, then **Save & Start**. The session plays on a loop under **V2G → v2g-demo** until the extension is stopped. From the CLI:
 
-It plays once and the extension exits.
+```bash
+zelos extensions start zeloscloud.zelos-extension-v2g --config '{"advanced": {"demo": true}}'
+uv run zelos-extension-v2g --demo        # from a checkout
+```
 
 ## What you get
 
@@ -102,6 +103,7 @@ A failed start says the same in the extension log. `V2G/check_permissions` repor
 | `advanced.prefix` | `V2G` | Trace source the rows land under |
 | `advanced.promiscuous` | `true` | Receive frames addressed to other stations, as a tap or bridge needs |
 | `advanced.replay_pcap` | | Decode this `.pcap`/`.pcapng` (plain or `.gz`/`.zst`) instead of capturing; plays once, then exits. `interfaces` is ignored |
+| `advanced.demo` | `false` | Play the bundled session on a loop until stopped. `interfaces`, `tls_keylog` and `advanced.replay_pcap` are ignored |
 | `advanced.log_level` | `INFO` | |
 
 If any configured interface cannot be opened, the start fails with the reason in the log.
@@ -122,7 +124,7 @@ uv run zelos-extension-v2g check                                  # probe permis
 uv run zelos-extension-v2g capture eth0 --tls-keylog keys.log     # capture, no app config
 uv run zelos-extension-v2g replay session.pcapng                  # stream a file to the agent once, paced
 uv run zelos-extension-v2g convert session.pcapng.gz              # write session.trz, no agent needed
-uv run zelos-extension-v2g --demo                                 # the bundled capture, played once
+uv run zelos-extension-v2g --demo                                 # the bundled capture, on a loop until stopped
 ```
 
 `capture`, `replay` and `convert` take `--tls-keylog` and `--prefix`.

@@ -31,7 +31,7 @@ logging.basicConfig(
 
 @click.group(invoke_without_command=True)
 @click.option(
-    "--demo", is_flag=True, help="Replay the bundled demo capture once, as Replay PCAP File does"
+    "--demo", is_flag=True, help="Replay the bundled demo capture until stopped, as Demo does"
 )
 @click.option(
     "--file",

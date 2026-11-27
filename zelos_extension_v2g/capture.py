@@ -362,10 +362,13 @@ def replay_pcap(
     name: str,
     prefix: str,
     v2g: V2gConfig = V2gConfig(),
+    loop: bool = False,
 ) -> dict[str, Any]:
     """Decode a pcap/pcapng into the *live* trace namespace. No privileges required.
 
     Paced at the capture's own rate and shifted so the first frame lands at now.
+    With `loop` the file plays again each time it ends, until interrupted. One
+    decoder serves every pass: its events can be registered on the source once.
     """
     pcap = Path(path).expanduser()
     if not pcap.exists():
@@ -374,6 +377,9 @@ def replay_pcap(
     decoder = REPLAYS[name] = make_decoder(name, prefix, v2g=v2g)
     try:
         count = decoder.convert_file(str(pcap), realtime=True)
+        while loop:
+            logger.info("Replay of %s complete: %d packets; playing it again", pcap.name, count)
+            count = decoder.convert_file(str(pcap), realtime=True)
         decoder.flush()
     finally:
         REPLAYS.pop(name, None)
