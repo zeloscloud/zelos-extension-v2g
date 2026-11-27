@@ -219,8 +219,8 @@ def convert(
 
 @action(
     "Demo Capture Path",
-    "Where the bundled demo capture is on the machine running the agent. Paste it "
-    "into Advanced > Replay PCAP File to try the extension without a charging link.",
+    "Where the bundled demo capture is on the machine running the agent, to play "
+    "it once with Advanced > Replay PCAP File. Advanced > Demo plays it until stopped.",
     standalone=True,
     hidden=True,
     read_only=True,

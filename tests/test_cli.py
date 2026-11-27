@@ -27,16 +27,29 @@ def app_config(fake_packet, monkeypatch) -> dict:
 
 
 class TestAppMode:
-    def test_demo_flag_replays_the_bundled_capture_once_and_exits(self, app_config):
+    @pytest.mark.parametrize("by", ["flag", "config"])
+    def test_demo_replays_the_bundled_capture_until_stopped(self, app_config, monkeypatch, by):
         import main
 
-        result = CliRunner().invoke(main.cli, ["--demo"])
+        # Set, and ignored: a key log that does not exist fails any other replay.
+        app_config.update(interfaces=[{"interface": "en0"}], tls_keylog="/nonexistent.keys")
+        app_config["advanced"] = {"demo": by == "config"}
+        passes: list[str] = []
+
+        def convert_file(_self, path: str, *, realtime: bool = False) -> int:
+            if len(passes) == 2:
+                raise KeyboardInterrupt  # the stop
+            passes.append(path)
+            return 155
+
+        monkeypatch.setattr(FakeDecoder, "convert_file", convert_file)
+        result = CliRunner().invoke(main.cli, ["--demo"] if by == "flag" else [])
         assert result.exit_code == 0, result.output
+        assert passes == [str(DEMO_PCAP)] * 2
+        assert FakeCapture.instances == []
         [decoder] = FakeDecoder.instances
-        assert decoder.path == str(DEMO_PCAP)
-        assert decoder.realtime is True and decoder.flushed
         assert (decoder.kwargs["name"], decoder.kwargs["source"].name) == ("v2g-demo", "V2G")
-        assert decoder.kwargs["v2g"] is True
+        assert decoder.kwargs["tls_keylog"] is None
 
     def test_replay_ignores_interfaces_and_takes_the_key_log(self, app_config):
         keys = FILES / "iso2-tls.keys"
@@ -48,6 +61,7 @@ class TestAppMode:
         app.run_app_mode(False, None)
         assert FakeCapture.instances == []
         [decoder] = FakeDecoder.instances
+        assert decoder.realtime is True and decoder.flushed
         assert decoder.kwargs["tls_keylog"] == str(keys.resolve())
 
     def test_live_settings_reach_every_capture(self, app_config, tmp_path: Path):

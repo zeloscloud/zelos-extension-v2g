@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 ADVANCED_DEFAULTS: dict[str, Any] = {
     "prefix": DEFAULT_PREFIX,
     "promiscuous": True,
+    "demo": False,
     "log_level": "INFO",
 }
 
@@ -162,12 +163,18 @@ def run_sessions(
 
 
 def run_replay(
-    path: Path, *, name: str, prefix: str, v2g: V2gConfig, output_file: Path | None
+    path: Path,
+    *,
+    name: str,
+    prefix: str,
+    v2g: V2gConfig,
+    output_file: Path | None,
+    loop: bool = False,
 ) -> None:
-    """Replay one capture into the live namespace, once, and return when it ends.
+    """Replay one capture into the live namespace and return when it ends.
 
-    A Stop mid-file unwinds as `KeyboardInterrupt`, which closes the writer and
-    is reported rather than raised.
+    With `loop` it plays until stopped. A Stop mid-file unwinds as
+    `KeyboardInterrupt`, which closes the writer and is reported rather than raised.
     """
     _install_replay_shutdown()
     try:
@@ -175,9 +182,12 @@ def run_replay(
             if output_file:
                 logger.info("Recording trace to: %s", output_file)
                 stack.enter_context(zelos_sdk.TraceWriter(str(output_file)))
-            replay_pcap(path, name=name, prefix=prefix, v2g=v2g)
+            replay_pcap(path, name=name, prefix=prefix, v2g=v2g, loop=loop)
     except KeyboardInterrupt:
-        logger.warning("Replay of %s stopped before it finished", path)
+        if loop:
+            logger.info("Replay of %s stopped", path)
+        else:
+            logger.warning("Replay of %s stopped before it finished", path)
 
 
 def run_app_mode(demo_flag: bool, file: Path | None) -> None:
@@ -192,24 +202,38 @@ def run_app_mode(demo_flag: bool, file: Path | None) -> None:
     if error := name_error(prefix, "Prefix", RESERVED_NAMES, required=True):
         _fail(error)
 
-    if demo_flag:
-        logger.info("Demo mode: replaying the bundled capture once")
-        advanced["replay_pcap"] = str(DEMO_PCAP)
+    demo = demo_flag or bool(advanced.get("demo"))
     replay = str(advanced.get("replay_pcap") or "").strip()
-
     interfaces: list[InterfaceConfig] = []
     v2g = V2gConfig()
-    try:
-        v2g = parse_v2g(config.get("tls_keylog"), must_exist=bool(replay))
-        if not replay:
-            interfaces = parse_interfaces(config)
-    except ConfigError as exc:
-        _fail(str(exc))
+    if demo:
+        ignored = [
+            title
+            for title, value in (
+                ("Interfaces", config.get("interfaces")),
+                ("TLS Key Log File", config.get("tls_keylog")),
+                ("Replay PCAP File", replay),
+            )
+            if value
+        ]
+        logger.info(
+            "Demo: replaying the bundled capture until stopped%s",
+            f" ({', '.join(ignored)} ignored)" if ignored else "",
+        )
+        replay = str(DEMO_PCAP)
+    else:
+        try:
+            v2g = parse_v2g(config.get("tls_keylog"), must_exist=bool(replay))
+            if not replay:
+                interfaces = parse_interfaces(config)
+        except ConfigError as exc:
+            _fail(str(exc))
     if not replay and not interfaces:
         _fail(
             "Nothing to do: no interfaces are configured and no replay file is set. "
             "Add an interface (run the 'List Interfaces' action to see what this "
-            "machine has), or set 'Replay PCAP File' to decode a capture instead."
+            "machine has), set 'Replay PCAP File' to decode a capture instead, or "
+            "turn on 'Demo' under Advanced."
         )
 
     output_file = resolve_output_file(file)
@@ -231,6 +255,7 @@ def run_app_mode(demo_flag: bool, file: Path | None) -> None:
                 prefix=prefix,
                 v2g=v2g,
                 output_file=output_file,
+                loop=demo,
             )
         except ConfigError as exc:
             _fail(str(exc))

@@ -3,7 +3,7 @@
   "type": "object",
   "additionalProperties": false,
   "title": "V2G Configuration",
-  "description": "Pick the network interfaces on the charging link, save, then start. SLAC, SDP and every V2G message between the vehicle and the charger appear as they cross the link. Live capture needs a one-time grant on the machine running the agent; a start without it stops with the command to run in the log. Decoding a pcap file needs no privileges at all.",
+  "description": "Pick the network interfaces on the charging link, save, then start. SLAC, SDP and every V2G message between the vehicle and the charger appear as they cross the link. Live capture needs a one-time grant on the machine running the agent; a start without it stops with the command to run in the log. Decoding a pcap file needs no privileges at all. No charging link at hand: turn on Demo under Advanced.",
   "ui:options": {
     "autoconfig": "V2G/auto_config"
   },
@@ -11,7 +11,7 @@
     "interfaces": {
       "type": "array",
       "title": "Interfaces",
-      "description": "Links to capture, in parallel. Each is a branch under the Prefix source. Leave empty when using Replay PCAP File.",
+      "description": "Links to capture, in parallel. Each is a branch under the Prefix source. Leave empty when using Demo or Replay PCAP File.",
       "items": {
         "title": "Interface",
         "type": "object",
@@ -49,7 +49,7 @@
     "advanced": {
       "type": "object",
       "title": "Advanced",
-      "description": "Settings that apply to every interface, and replaying a capture file instead.",
+      "description": "Settings that apply to every interface, replaying a capture file instead, and the demo.",
       "ui:options": {
         "collapsed": true
       },
@@ -78,6 +78,12 @@
           "ui:options": {
             "accept": ".pcap,.pcapng,.gz,.zst"
           }
+        },
+        "demo": {
+          "type": "boolean",
+          "title": "Demo",
+          "description": "Play the bundled DC charging session on a loop until stopped, to try the extension without a charging link. Needs no privileges. When on, Interfaces, TLS Key Log File and Replay PCAP File are ignored.",
+          "default": false
         },
         "log_level": {
           "type": "string",

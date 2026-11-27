@@ -3,6 +3,7 @@
   "advanced": {
     "prefix": "V2G",
     "promiscuous": true,
+    "demo": false,
     "log_level": "INFO"
   }
 }

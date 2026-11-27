@@ -34,7 +34,7 @@
 | `just release VERSION` | Bump version, check, test, commit, tag        |
 | `just clean`           | Remove build output, caches and packages      |
 | `just run`             | Run the extension against `./config.json`     |
-| `just demo`            | Replay the bundled demo capture once          |
+| `just demo`            | Replay the bundled demo capture until stopped |
 | `just interfaces`      | List capturable NICs                          |
 | `just check-permissions` | Probe capture rights and print the fix      |
 

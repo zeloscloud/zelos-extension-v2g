@@ -26,7 +26,12 @@ class TestSchema:
         config = load(tmp_path, {})
         assert config["interfaces"] == []
         assert config["advanced"] == ADVANCED_DEFAULTS
-        assert ADVANCED_DEFAULTS == {"prefix": "V2G", "promiscuous": True, "log_level": "INFO"}
+        assert ADVANCED_DEFAULTS == {
+            "prefix": "V2G",
+            "promiscuous": True,
+            "demo": False,
+            "log_level": "INFO",
+        }
 
     def test_shipped_config_json_validates(self, tmp_path: Path):
         shipped = json.loads((REPO_ROOT / "config.json").read_text())
